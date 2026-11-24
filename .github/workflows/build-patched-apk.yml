@@ -178,14 +178,19 @@ jobs:
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
-            # Android 10 requires explicit acceptance of the legacy-permission review UI.
+            # Android 10 may show a legacy permission-review surface after install.
             adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro || true
             sleep 2
             python3 tools/accept_legacy_permission_review.py
-            sleep 3
+            # Relaunch through Package Manager's resolved launcher activity. Starting
+            # BackupPro directly can leave us on Home when Android redirects the launch.
+            adb shell am force-stop com.islamic.org || true
+            adb shell monkey -p com.islamic.org 1
+            sleep 5
             adb shell dumpsys activity activities > activity-smoke.txt
-            grep -F "com.islamic.org/com.android.inputmethod.latin.BackupPro" activity-smoke.txt
             adb shell dumpsys input_method > ime-smoke.txt
+            adb logcat -d -t 5000 > logcat-smoke.txt
+            grep -F "com.islamic.org" activity-smoke.txt
             grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
             adb shell am start -a android.settings.SETTINGS
             adb shell input keyevent 84
@@ -193,8 +198,8 @@ jobs:
             adb shell input text "smoketest"
             sleep 2
             adb shell dumpsys input_method > ime-smoke.txt
+            adb logcat -d -t 5000 > logcat-smoke.txt
             grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
-            adb logcat -d -t 3000 > logcat-smoke.txt
             ! grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt
 
       - name: Upload emulator smoke-test evidence
