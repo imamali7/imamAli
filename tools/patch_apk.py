@@ -1,66 +1,69 @@
 #!/usr/bin/env python3
-"""Apply guarded, reproducible startup and clipboard Smali optimizations."""
+"""Apply guarded startup and clipboard-history optimizations to decoded Smali."""
 from pathlib import Path
 import sys
 
-TARGET = Path(sys.argv[1]) / "smali/com/android/inputmethod/latin/DictionaryEditor.smali"
-text = TARGET.read_text(encoding="utf-8")
+root = Path(sys.argv[1])
+target = root / "smali/com/android/inputmethod/latin/DictionaryEditor.smali"
+source = target.read_text(encoding="utf-8")
 
-startup_call = "    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V"
-if text.count(startup_call) != 1:
-    raise SystemExit(f"Expected exactly one eager startup dbload call; found {text.count(startup_call)}")
-text = text.replace(startup_call, "    # Clipboard history is loaded only when its panel is opened.", 1)
+# Defer expensive clipboard-history reads until the clipboard UI is requested.
+eager = "    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V"
+if source.count(eager) != 1:
+    raise SystemExit(f"Expected one eager dbload call; found {source.count(eager)}")
+source = source.replace(eager, "    # Clipboard history is loaded only when its panel is opened.", 1)
 
-panel = """.method po1()V
+clipboard_panel = """.method po1()V
     .locals 8
 
     .prologue
-    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->getLayoutInflater()Landroid/view/LayoutInflater;
 """
-panel_replacement = """.method po1()V
-    .locals 8
+if source.count(clipboard_panel) != 1:
+    raise SystemExit("Clipboard panel method anchor mismatch")
+source = source.replace(
+    clipboard_panel,
+    clipboard_panel + "    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V\n\n",
+    1,
+)
 
-    .prologue
-    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V
-
-    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->getLayoutInflater()Landroid/view/LayoutInflater;
-"""
-if text.count(panel) != 1:
-    raise SystemExit(f"Expected one clipboard panel method anchor; found {text.count(panel)}")
-text = text.replace(panel, panel_replacement, 1)
-
-old_loop = """    if-eqz v1, :cond_0
+# Rebuild the reversed display list once, not for every database row.
+old_tail = """    if-eqz v1, :cond_0
 
     .line 266
     iget-object v1, p0, Lcom/android/inputmethod/latin/DictionaryEditor;->db:Landroid/database/sqlite/SQLiteDatabase;
 """
-new_loop = """    if-eqz v1, :cond_0
+new_tail = """    if-eqz v1, :cond_0
 
     invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->listfp()V
 
-    .line 266
     invoke-interface {v0}, Landroid/database/Cursor;->close()V
 
+    .line 266
     iget-object v1, p0, Lcom/android/inputmethod/latin/DictionaryEditor;->db:Landroid/database/sqlite/SQLiteDatabase;
 """
-old_call = """    .line 264
+old_inside = """    .line 264
     invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->listfp()V
     :try_end_0
 """
-new_call = """    .line 264
+new_inside = """    .line 264
     :try_end_0
 """
-if text.count(old_loop) != 1 or text.count(old_call) != 1:
-    raise SystemExit("dbload Smali anchors did not match exactly; refusing to patch")
-text = text.replace(old_loop, new_loop, 1).replace(old_call, new_call, 1)
+if source.count(old_tail) != 1 or source.count(old_inside) != 1:
+    raise SystemExit("dbload loop anchors mismatch; refusing partial patch")
+source = source.replace(old_tail, new_tail, 1).replace(old_inside, new_inside, 1)
 
-dbload = """.method dbload()V
+# Clear only the in-memory snapshot before reload; the SQLite history is untouched.
+dbload_start = """.method dbload()V
     .locals 4
 
     .prologue
     .line 256
 """
-dbload_replacement = """.method dbload()V
+if source.count(dbload_start) != 1:
+    raise SystemExit("dbload method anchor mismatch")
+source = source.replace(
+    dbload_start,
+    """.method dbload()V
     .locals 4
 
     .prologue
@@ -68,10 +71,9 @@ dbload_replacement = """.method dbload()V
     invoke-interface {v1}, Ljava/util/List;->clear()V
 
     .line 256
-"""
-if text.count(dbload) != 1:
-    raise SystemExit("dbload method anchor did not match exactly; refusing to patch")
-text = text.replace(dbload, dbload_replacement, 1)
+""",
+    1,
+)
 
-TARGET.write_text(text, encoding="utf-8")
-print("Patched startup: clipboard DB read deferred until clipboard panel opens; list rebuilt once.")
+target.write_text(source, encoding="utf-8")
+print("OK: deferred startup history read; list rebuild once; cursor closed on normal completion.")
