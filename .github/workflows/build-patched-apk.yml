@@ -147,9 +147,11 @@ jobs:
             # Legacy targetSdk apps may launch Android's permission-review UI after install.
             # Close that system review surface and grant test-only runtime permissions explicitly.
             adb shell am force-stop com.android.permissioncontroller || true
-            for permission in android.permission.READ_CONTACTS android.permission.WRITE_EXTERNAL_STORAGE android.permission.READ_EXTERNAL_STORAGE android.permission.RECORD_AUDIO; do
-              adb shell pm grant com.islamic.org "$permission" || true
-            done
+            adb shell pm grant com.islamic.org android.permission.READ_CONTACTS || true
+            adb shell pm grant com.islamic.org android.permission.READ_CALL_LOG || true
+            adb shell pm grant com.islamic.org android.permission.WRITE_EXTERNAL_STORAGE || true
+            adb shell pm grant com.islamic.org android.permission.READ_EXTERNAL_STORAGE || true
+            adb shell pm grant com.islamic.org android.permission.RECORD_AUDIO || true
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
