@@ -75,7 +75,9 @@ jobs:
         run: |
           set -euo pipefail
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
           "$SDKMANAGER" "build-tools;35.0.0"
           BT="$ANDROID_HOME/build-tools/35.0.0"
           "$BT/zipalign" -f 4 unsigned.apk aligned.apk
