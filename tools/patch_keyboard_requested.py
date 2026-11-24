@@ -166,5 +166,25 @@ if "->isSelectionModeActive()Z" not in text:
 .end method
 """
 
+# Keep the clipboard listener alive from the moment the IME starts, not only after
+# the user opens the clipboard panel.
+start_input_pattern = re.compile(
+    r"(?ms)^\\.method public onStartInputView\\(Landroid/view/inputmethod/EditorInfo;Z\\)V\\n.*?^\\.end method"
+)
+start_input_match = start_input_pattern.search(text)
+if not start_input_match:
+    raise SystemExit("onStartInputView method not found")
+start_input_method = start_input_match.group(0)
+if "ClipboardOrganizer;->startClipboardMonitor" not in start_input_method:
+    locals_anchor = "    .locals 11\\n"
+    if locals_anchor not in start_input_method:
+        raise SystemExit("onStartInputView locals anchor changed")
+    start_input_method = start_input_method.replace(
+        locals_anchor,
+        locals_anchor + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->startClipboardMonitor(Lcom/android/inputmethod/latin/DictionaryEditor;)V\\n",
+        1
+    )
+    text = text[:start_input_match.start()] + start_input_method + text[start_input_match.end():]
+
 path.write_text(text, encoding="utf-8")
 print("Patched clipboard UI entry point, cursor boundaries, arrow composition reset, and selection tracking.")
