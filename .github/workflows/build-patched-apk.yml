@@ -1,0 +1,88 @@
+name: Build patched keyboard APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/patch_apk.py"
+      - ".github/workflows/build-patched-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patched-keyboard-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Locate and validate original APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find . -maxdepth 1 -type f -iname '*.apk' -print)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "Expected exactly one original APK; found ${#apks[@]}." >&2
+            exit 1
+          fi
+          echo "path=${apks[0]}" >> "$GITHUB_OUTPUT"
+          sha256sum "${apks[0]}" | tee original-apk-sha256.txt
+          unzip -t "${apks[0]}"
+
+      - name: Download APKTool
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
+            --output apktool.jar
+
+      - name: Decode and patch Smali
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar d -f "$APK_PATH" -o decoded
+          python3 tools/patch_apk.py decoded
+          grep -n -A12 -B4 'Build the reversed display list once' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+
+      - name: Rebuild APK
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar b decoded -o unsigned.apk
+          unzip -t unsigned.apk
+
+      - name: Align and sign debug APK
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;35.0.0"
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          "$BT/zipalign" -f 4 unsigned.apk aligned.apk
+          keytool -genkeypair -v -keystore debug.keystore -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          "$BT/apksigner" sign --ks debug.keystore --ks-pass pass:android \
+            --key-pass pass:android --out keyboard-patched-debug.apk aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs keyboard-patched-debug.apk
+          unzip -t keyboard-patched-debug.apk
+
+      - name: Upload patched APK and build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyboard-patched-debug-${{ github.run_number }}
+          path: |
+            keyboard-patched-debug.apk
+            original-apk-sha256.txt
+          if-no-files-found: error
+          retention-days: 30
