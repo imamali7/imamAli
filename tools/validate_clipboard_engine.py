@@ -36,7 +36,7 @@ for token in required_smali:
     if token not in smali:
         raise SystemExit("Keyboard wiring acceptance failed: missing Smali call " + token)
 
-portrait = [n for n in prefs.iter() if n.attrib.get(android + "key1") == "@string/key_hight_vertical"]
+portrait = [n for n in prefs.iter() if n.attrib.get("key1") == "@string/key_hight_vertical"]
 if len(portrait) != 1:
     raise SystemExit("Expected exactly one portrait keyboard preferences entry")
 expected = {
@@ -47,7 +47,7 @@ expected = {
     "defaultValue5": "58",
 }
 for key, value in expected.items():
-    if portrait[0].attrib.get(android + key) != value:
+    if portrait[0].attrib.get(key) != value:
         raise SystemExit("Portrait default mismatch: " + key)
 toggles = [n for n in prefs.iter() if n.attrib.get(android + "key") == "clipboard_history_enabled"]
 if len(toggles) != 1 or toggles[0].attrib.get(android + "defaultValue") != "true":
