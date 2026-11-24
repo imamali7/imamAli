@@ -758,7 +758,7 @@ public final class ClipboardOrganizer {
         try {
             db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
             int current = id;
-            for (int depth = 0; depth < 100 && current != ROOT; depth++) {
+            for (int depth = 0; depth < 1000 && current != ROOT; depth++) {
                 c = db.rawQuery("SELECT name,parent_id FROM folders WHERE _id=?",
                         new String[] { String.valueOf(current) });
                 if (!c.moveToFirst()) { c.close(); c = null; break; }
