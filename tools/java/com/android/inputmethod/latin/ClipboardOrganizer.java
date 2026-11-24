@@ -931,35 +931,56 @@ public final class ClipboardOrganizer {
     private void savePrimaryClip(ClipboardManager manager) {
         if (manager == null || Build.VERSION.SDK_INT < 11) return;
         if (!ensureSchema()) return;
-        ClipData clip = null;
         SQLiteDatabase db = null;
         Cursor cursor = null;
         try {
-            clip = manager.getPrimaryClip();
+            ClipData clip = manager.getPrimaryClip();
             if (clip == null || clip.getItemCount() == 0) return;
             db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
+            db.beginTransaction();
+
+            // Read the newest stored item once. This avoids one cursor query per
+            // clipboard item and suppresses repeated notifications for the same clip.
+            String lastSaved = null;
+            cursor = db.rawQuery("SELECT note FROM notes ORDER BY rowid DESC LIMIT 1", null);
+            if (cursor.moveToFirst()) lastSaved = cursor.getString(0);
+            cursor.close();
+            cursor = null;
+
+            Set<String> seenInClip = new HashSet<String>();
             for (int i = 0; i < clip.getItemCount(); i++) {
-                CharSequence value = clip.getItemAt(i).coerceToText(owner);
-                if (value == null) continue;
-                String text = value.toString();
+                String text;
+                try {
+                    CharSequence value = clip.getItemAt(i).coerceToText(owner);
+                    if (value == null) continue;
+                    text = value.toString();
+                } catch (Exception unreadableItem) {
+                    // A URI or malformed item must not prevent later text items
+                    // in the same ClipData from being preserved.
+                    continue;
+                }
                 if (text.trim().length() == 0) continue;
-                boolean duplicate = false;
-                cursor = db.rawQuery("SELECT note FROM notes ORDER BY rowid DESC LIMIT 1", null);
-                if (cursor.moveToFirst()) duplicate = text.equals(cursor.getString(0));
-                cursor.close();
-                cursor = null;
-                if (duplicate) continue;
+                if (text.equals(lastSaved) || !seenInClip.add(text)) continue;
+
                 ContentValues values = new ContentValues();
                 values.put("note", text);
                 values.put("folder_id", ROOT);
-                db.insert("notes", null, values);
+                long inserted = db.insert("notes", null, values);
+                if (inserted != -1) lastSaved = text;
             }
+
+            // Keep the existing history limit without touching items in user folders.
             db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN " +
                     "(SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
+            db.setTransactionSuccessful();
         } catch (Exception ignored) {
+            // Clipboard callbacks must never crash the input method.
         } finally {
             if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
-            if (db != null) try { db.close(); } catch (Exception ignored) {}
+            if (db != null) {
+                try { if (db.inTransaction()) db.endTransaction(); } catch (Exception ignored) {}
+                try { db.close(); } catch (Exception ignored) {}
+            }
         }
     }
 
