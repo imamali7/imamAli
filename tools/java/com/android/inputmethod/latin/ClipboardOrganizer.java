@@ -499,6 +499,8 @@ public final class ClipboardOrganizer {
             for (String key : new ArrayList<String>(selected)) {
                 long id = parseId(key);
                 if (key.startsWith("N:")) {
+                    int sourceFolder = getNoteFolderId(db, id);
+                    if (hasSelectedFolderAncestor(db, sourceFolder, true)) continue;
                     ContentValues values = new ContentValues();
                     values.put("folder_id", target);
                     db.update("notes", values, "rowid=?", new String[] { String.valueOf(id) });
@@ -508,7 +510,7 @@ public final class ClipboardOrganizer {
                         continue;
                     }
                     int oldParent = getParentId(db, id);
-                    if (selected.contains("F:" + oldParent)) continue;
+                    if (hasSelectedFolderAncestor(db, oldParent, true)) continue;
                     ContentValues values = new ContentValues();
                     values.put("parent_id", target);
                     db.update("folders", values, "_id=?", new String[] { String.valueOf(id) });
@@ -629,6 +631,41 @@ public final class ClipboardOrganizer {
             toast("تعذر نقل المجلد");
             return false;
         } finally { if (db != null) try { db.close(); } catch (Exception ignored) {} }
+    }
+
+    private int getNoteFolderId(SQLiteDatabase db, long noteId) {
+        Cursor c = null;
+        try {
+            c = db.rawQuery("SELECT IFNULL(folder_id,0) FROM notes WHERE rowid=?",
+                    new String[] { String.valueOf(noteId) });
+            return c.moveToFirst() ? c.getInt(0) : ROOT;
+        } catch (Exception ignored) {
+            return ROOT;
+        } finally {
+            if (c != null) try { c.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    /** True when this folder or one of its parents is included in the current selection. */
+    private boolean hasSelectedFolderAncestor(SQLiteDatabase db, long folderId, boolean includeSelf) {
+        long current = folderId;
+        Cursor c = null;
+        try {
+            for (int depth = 0; depth < 1000 && current != ROOT; depth++) {
+                if (includeSelf && selected.contains("F:" + current)) return true;
+                c = db.rawQuery("SELECT parent_id FROM folders WHERE _id=?",
+                        new String[] { String.valueOf(current) });
+                if (!c.moveToFirst()) return false;
+                current = c.getLong(0);
+                c.close();
+                c = null;
+                includeSelf = true;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (c != null) try { c.close(); } catch (Exception ignored) {}
+        }
+        return false;
     }
 
     private int getParentId(SQLiteDatabase db, long id) {
