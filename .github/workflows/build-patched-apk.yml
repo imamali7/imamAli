@@ -75,7 +75,8 @@ jobs:
           python3 tools/export_keyboard_resources.py decoded
           python3 tools/patch_keyboard_requested.py decoded
           bash tools/build_clipboard_helper.sh
-          grep -n -A10 -B4 'invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A5 -B4 'ClipboardOrganizer;->show' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A5 -B4 'ClipboardOrganizer;->moveToBoundary' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A4 -B4 'safeShowDialog' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A4 -B4 'List;->add(ILjava/lang/Object;)V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor\$20.smali
