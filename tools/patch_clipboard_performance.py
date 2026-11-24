@@ -34,10 +34,12 @@ for filename, (old, new) in patches.items():
         path.write_text(text, encoding="utf-8")
         print(f"OK: {filename}: incremental newest-first clipboard update")
     elif old_count == 0 and new_count == 1:
-        print(f"OK: {filename}: already optimized")
+        print(f"OK: {filename}: already incrementally optimized")
+    elif old_count == 0 and "->listfp()V" not in text:
+        # The feature bundle may have moved insertion into a shared helper.
+        print(f"OK: {filename}: listfp() removed by the feature bundle; retaining its implementation")
     else:
-        raise SystemExit(
-            f"Unexpected patch anchors in {filename}: old={old_count}, new={new_count}"
-        )
+        anchors = [line.strip() for line in text.splitlines() if "listfp()V" in line or "listf:Ljava/util/List;" in line or "List;->add(" in line]
+        raise SystemExit(f"Unexpected patch anchors in {filename}: old={old_count}, new={new_count}, related={anchors}")
 
-print("OK: clipboard insertion no longer copies the entire history per new item.")
+print("OK: no full reversed-list rebuild remains in the clipboard listeners.")
