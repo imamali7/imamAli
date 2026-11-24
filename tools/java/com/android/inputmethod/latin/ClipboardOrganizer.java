@@ -919,6 +919,7 @@ public final class ClipboardOrganizer {
 
     private void savePrimaryClip(ClipboardManager manager) {
         if (manager == null || Build.VERSION.SDK_INT < 11) return;
+        if (!ensureSchema()) return;
         ClipData clip = null;
         SQLiteDatabase db = null;
         Cursor cursor = null;
