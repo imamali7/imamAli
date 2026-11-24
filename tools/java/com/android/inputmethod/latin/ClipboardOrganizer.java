@@ -131,6 +131,13 @@ public final class ClipboardOrganizer {
                 selectionActiveAbsolute = caret;
                 selectionOwner = new WeakReference<DictionaryEditor>(owner);
             }
+            int reportedStart = base + Math.max(0, Math.min(length, extracted.selectionStart));
+            int reportedEnd = base + Math.max(0, Math.min(length, extracted.selectionEnd));
+            if (reportedStart != selectionActiveAbsolute && reportedEnd != selectionActiveAbsolute) {
+                int caret = reportedEnd;
+                selectionAnchorAbsolute = caret;
+                selectionActiveAbsolute = caret;
+            }
             int active = Math.max(base, Math.min(limit, selectionActiveAbsolute));
             int index = active - base;
             int target = index;
