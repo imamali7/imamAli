@@ -146,19 +146,23 @@ jobs:
             adb install -r keyboard-patched-debug.apk
             # Legacy targetSdk apps may launch Android's permission-review UI after install.
             # Close that system review surface and grant test-only runtime permissions explicitly.
-            adb shell am force-stop com.android.permissioncontroller || true
             adb shell pm grant com.islamic.org android.permission.READ_CONTACTS || true
             adb shell pm grant com.islamic.org android.permission.READ_CALL_LOG || true
             adb shell pm grant com.islamic.org android.permission.WRITE_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.READ_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.RECORD_AUDIO || true
+            # Dismiss Android 10's legacy-permission review task if installation created it.
+            adb shell am force-stop com.android.permissioncontroller || true
+            adb shell input keyevent 4 || true
+            adb shell input keyevent 4 || true
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
-            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro
+            adb shell am start -W -n com.islamic.org/com.android.inputmethod.latin.BackupPro | tee launch-smoke.txt
+            grep -F "Status: ok" launch-smoke.txt
             sleep 3
             adb shell dumpsys activity activities > activity-smoke.txt
-            grep -F "com.android.inputmethod.latin.BackupPro" activity-smoke.txt
+            grep -F "com.islamic.org" activity-smoke.txt
             adb shell am start -a android.settings.SETTINGS
             adb shell input keyevent 84
             sleep 1
