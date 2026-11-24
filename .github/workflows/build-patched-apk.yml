@@ -6,6 +6,7 @@ on:
     paths:
       - "tools/patch_apk.py"
       - "tools/patch_bundle.py"
+      - "tools/patch_clipboard_performance.py"
       - ".github/workflows/build-patched-apk.yml"
 
 permissions:
@@ -57,13 +58,16 @@ jobs:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
           python3 tools/patch_bundle.py decoded
+          python3 tools/patch_clipboard_performance.py decoded
           grep -n -A10 -B4 'invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A4 -B4 'safeShowDialog' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A4 -B4 'List;->add(ILjava/lang/Object;)V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor\$20.smali
+          grep -n -A4 -B4 'List;->add(ILjava/lang/Object;)V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor\$17.smali
 
       - name: Rebuild APK
         run: |
