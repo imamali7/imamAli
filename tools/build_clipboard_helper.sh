@@ -10,7 +10,7 @@ BUILD="$ROOT/.clipboard-helper-build"
 rm -rf "$BUILD"
 mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/smali"
 
-if [ ! -f "$ANDROID_JAR" ]; then
+if [ ! -f "$ANDROID_JAR" ] || [ ! -x "$BT/d8" ]; then
   SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
   set +o pipefail
   yes | "$SDKMANAGER" --licenses >/dev/null
