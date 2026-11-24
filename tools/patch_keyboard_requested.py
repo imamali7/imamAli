@@ -78,6 +78,24 @@ if "ClipboardOrganizer;->moveToBoundary" not in send_method:
 """, 1)
     text = text[:m.start()] + send_method + text[m.end():]
 
+# Shift-selection uses absolute document offsets instead of relying on editor-specific KeyEvent handling.
+selection_anchor = """    if-eqz v0, :plain
+    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->getCurrentInputConnection()Landroid/view/inputmethod/InputConnection;
+"""
+selection_replacement = """    if-eqz v0, :plain
+    invoke-static {p0, p1}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->moveWithSelection(Lcom/android/inputmethod/latin/DictionaryEditor;I)Z
+    move-result v0
+    if-eqz v0, :clipboard_shift_fallback
+    goto :done
+    :clipboard_shift_fallback
+    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->getCurrentInputConnection()Landroid/view/inputmethod/InputConnection;
+"""
+if "ClipboardOrganizer;->moveWithSelection" not in send_method:
+    if selection_anchor not in send_method:
+        raise SystemExit("sendEditorKey selection anchor not found")
+    send_method = send_method.replace(selection_anchor, selection_replacement, 1)
+    text = text[:m.start()] + send_method + text[m.end():]
+
 # HOME and END must also reset stale composing state after moving the cursor.
 text = text.replace(
     """    :sswitch_12
@@ -127,6 +145,9 @@ new = """    iget v1, p0, Lcom/android/inputmethod/latin/DictionaryEditor;->mLas
 if old not in text:
     raise SystemExit("onUpdateSelection anchor block not found")
 text = text.replace(old, new, 1)
+
+if "ClipboardOrganizer;->moveWithSelection" not in text:
+    raise SystemExit("Selection-mode cursor movement helper was not wired into sendEditorKey")
 
 # Expose selection mode to the Java helper so HOME/END can extend an existing selection.
 if "->isSelectionModeActive()Z" not in text:
