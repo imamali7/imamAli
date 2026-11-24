@@ -400,8 +400,8 @@ public final class ClipboardOrganizer {
         final String[] actions = row.folder
                 ? new String[] { "فتح المجلد", "إعادة تسمية", "نقل المجلد", "حذف المجلد" }
                 : new String[] { "نقل النص إلى مجلد", "حذف النص" };
-        new AlertDialog.Builder(owner).setTitle(row.folder ? row.text : "إدارة النص")
-                .setItems(actions, new DialogInterface.OnClickListener() {
+        AlertDialog.Builder menu = new AlertDialog.Builder(owner).setTitle(row.folder ? row.text : "إدارة النص");
+        menu.setItems(actions, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         if (row.folder) {
                             if (which == 0) {
@@ -420,18 +420,20 @@ public final class ClipboardOrganizer {
                             else if (which == 1) deleteNote(row.id);
                         }
                     }
-                }).show();
+                });
+        showPrompt(menu);
     }
 
     private void confirmDeleteFolder(final Row row) {
-        new AlertDialog.Builder(owner).setTitle("حذف المجلد")
-                .setMessage("سيتم نقل النصوص والمجلدات الفرعية إلى المجلد الأب، ولن تُحذف محتوياتها.")
-                .setPositiveButton("حذف", new DialogInterface.OnClickListener() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(owner).setTitle("حذف المجلد")
+                .setMessage("سيتم نقل النصوص والمجلدات الفرعية إلى المجلد الأب، ولن تُحذف محتوياتها.");
+        builder.setPositiveButton("حذف", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         deleteFolder(row.id);
                         showList();
                     }
-                }).setNegativeButton("إلغاء", null).show();
+                }).setNegativeButton("إلغاء", null);
+        showPrompt(builder);
     }
 
     private void moveSelectedDialog() {
@@ -470,8 +472,8 @@ public final class ClipboardOrganizer {
         });
         final CharSequence[] labels = new CharSequence[options.size()];
         for (int i = 0; i < options.size(); i++) labels[i] = options.get(i).label;
-        new AlertDialog.Builder(owner).setTitle("اختر المجلد الهدف")
-                .setItems(labels, new DialogInterface.OnClickListener() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(owner).setTitle("اختر المجلد الهدف");
+        builder.setItems(labels, new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         int target = options.get(which).id;
                         if (singleRow != null) {
@@ -486,7 +488,8 @@ public final class ClipboardOrganizer {
                         }
                         showList();
                     }
-                }).setNegativeButton("إلغاء", null).show();
+                }).setNegativeButton("إلغاء", null);
+        showPrompt(builder);
     }
 
     private void moveSelectedTo(int target) {
@@ -523,9 +526,9 @@ public final class ClipboardOrganizer {
 
     private void deleteSelected() {
         if (selected.size() == 0) { toast("لا توجد عناصر محددة"); return; }
-        new AlertDialog.Builder(owner).setTitle("حذف العناصر المحددة")
-                .setMessage("هل تريد حذف النصوص والمجلدات المحددة؟ ستُنقل محتويات المجلدات إلى المجلد الأب.")
-                .setPositiveButton("حذف", new DialogInterface.OnClickListener() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(owner).setTitle("حذف العناصر المحددة")
+                .setMessage("هل تريد حذف النصوص والمجلدات المحددة؟ ستُنقل محتويات المجلدات إلى المجلد الأب.");
+        builder.setPositiveButton("حذف", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int which) {
                         SQLiteDatabase db = null;
                         try {
@@ -547,7 +550,8 @@ public final class ClipboardOrganizer {
                             if (db != null) try { db.close(); } catch (Exception ignored) {}
                         }
                     }
-                }).setNegativeButton("إلغاء", null).show();
+                }).setNegativeButton("إلغاء", null);
+        showPrompt(builder);
     }
 
     private void toggleSelection(Row row) {
@@ -774,6 +778,14 @@ public final class ClipboardOrganizer {
         drawable.setColor(color);
         drawable.setCornerRadius(radius);
         return drawable;
+    }
+
+    private AlertDialog showPrompt(AlertDialog.Builder builder) {
+        AlertDialog prompt = builder.create();
+        attachWindow(prompt);
+        prompt.show();
+        attachWindow(prompt);
+        return prompt;
     }
 
     private void attachWindow(AlertDialog target) {
