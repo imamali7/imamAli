@@ -102,6 +102,21 @@ if "ClipboardOrganizer;->moveWithSelection" not in send_method:
     send_method = send_method.replace(selection_anchor, selection_replacement, 1)
     text = text[:m.start()] + send_method + text[m.end():]
 
+# When selection mode is disabled, discard the previous anchor before plain cursor moves.
+m = send_pattern.search(text)
+if not m:
+    raise SystemExit("sendEditorKey method not found while wiring selection reset")
+send_method = m.group(0)
+if "ClipboardOrganizer;->resetSelectionSession" not in send_method:
+    if "    :plain\n" not in send_method:
+        raise SystemExit("sendEditorKey plain branch not found for selection reset")
+    send_method = send_method.replace(
+        "    :plain\n",
+        "    :plain\n    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->resetSelectionSession(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n",
+        1
+    )
+    text = text[:m.start()] + send_method + text[m.end():]
+
 # HOME and END must also reset stale composing state after moving the cursor.
 text = text.replace(
     """    :sswitch_12
@@ -181,7 +196,7 @@ if "ClipboardOrganizer;->startClipboardMonitor" not in start_input_method:
         raise SystemExit("onStartInputView locals anchor changed")
     start_input_method = start_input_method.replace(
         locals_anchor,
-        locals_anchor + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->startClipboardMonitor(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n",
+        locals_anchor + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->resetSelectionSession(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n" + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->startClipboardMonitor(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n",
         1
     )
     text = text[:start_input_match.start()] + start_input_method + text[start_input_match.end():]

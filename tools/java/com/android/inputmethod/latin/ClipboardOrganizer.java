@@ -13,6 +13,9 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
+import android.preference.PreferenceManager;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -41,6 +44,10 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.lang.ref.WeakReference;
+import java.security.MessageDigest;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Clipboard UI and folder storage for the legacy keyboard.
@@ -56,7 +63,13 @@ public final class ClipboardOrganizer {
     private static final int COLOR_MUTED = Color.rgb(190, 198, 207);
     private static ClipboardManager monitoredClipboard;
     private static ClipboardManager.OnPrimaryClipChangedListener clipboardListener;
-    private static DictionaryEditor clipboardOwner;
+    private static WeakReference<DictionaryEditor> clipboardOwner = new WeakReference<DictionaryEditor>(null);
+    private static WeakReference<ClipboardOrganizer> activeScreen = new WeakReference<ClipboardOrganizer>(null);
+    private static final ExecutorService CLIPBOARD_EXECUTOR = Executors.newSingleThreadExecutor();
+    private static String lastObservedClipSignature;
+    private static WeakReference<DictionaryEditor> selectionOwner = new WeakReference<DictionaryEditor>(null);
+    private static int selectionAnchorAbsolute = -1;
+    private static int selectionActiveAbsolute = -1;
 
     private final DictionaryEditor owner;
     private AlertDialog dialog;
@@ -95,10 +108,11 @@ public final class ClipboardOrganizer {
         }
     }
 
-    /** Move one caret step while the keyboard selection modifier is active. */
+    /** Extend selection from one stable anchor instead of Android's normalized range edge. */
     public static boolean moveWithSelection(DictionaryEditor owner, int keyCode) {
         if (owner == null || keyCode < 19 || keyCode > 22) return false;
         try {
+            if (!owner.isSelectionModeActive()) { resetSelectionSession(owner); return false; }
             InputConnection connection = owner.getCurrentInputConnection();
             if (connection == null) return false;
             ExtractedTextRequest request = new ExtractedTextRequest();
@@ -106,46 +120,69 @@ public final class ClipboardOrganizer {
             request.hintMaxLines = 100000;
             ExtractedText extracted = connection.getExtractedText(request, 0);
             if (extracted == null || extracted.text == null) return false;
-            CharSequence document = extracted.text;
+            String document = extracted.text.toString();
             int base = Math.max(0, extracted.startOffset);
             int length = document.length();
-            int active = base + Math.max(0, Math.min(length, extracted.selectionEnd));
-            int anchor = base + Math.max(0, Math.min(length, extracted.selectionStart));
-            int index = Math.max(0, Math.min(length, active - base));
+            int limit = base + length;
+            DictionaryEditor previous = selectionOwner == null ? null : selectionOwner.get();
+            if (previous != owner || selectionAnchorAbsolute < 0) {
+                int caret = base + Math.max(0, Math.min(length, extracted.selectionEnd));
+                selectionAnchorAbsolute = caret;
+                selectionActiveAbsolute = caret;
+                selectionOwner = new WeakReference<DictionaryEditor>(owner);
+            }
+            int reportedStart = base + Math.max(0, Math.min(length, extracted.selectionStart));
+            int reportedEnd = base + Math.max(0, Math.min(length, extracted.selectionEnd));
+            if (reportedStart != selectionActiveAbsolute && reportedEnd != selectionActiveAbsolute) {
+                int caret = reportedEnd;
+                selectionAnchorAbsolute = caret;
+                selectionActiveAbsolute = caret;
+            }
+            int active = Math.max(base, Math.min(limit, selectionActiveAbsolute));
+            int index = active - base;
             int target = index;
-            if (keyCode == 21) {
-                target = Math.max(0, index - 1);
-            } else if (keyCode == 22) {
-                target = Math.min(length, index + 1);
-            } else {
-                int lineStart = index == 0 ? 0 : document.toString().lastIndexOf("\n", index - 1) + 1;
+            if (keyCode == 21) target = Math.max(0, index - 1);
+            else if (keyCode == 22) target = Math.min(length, index + 1);
+            else {
+                int lineStart = index == 0 ? 0 : document.lastIndexOf("\n", index - 1) + 1;
                 int column = index - lineStart;
                 if (keyCode == 19) {
                     if (lineStart == 0) target = 0;
                     else {
                         int previousEnd = lineStart - 1;
-                        int previousStart = document.toString().lastIndexOf("\n", previousEnd - 1) + 1;
+                        int previousStart = document.lastIndexOf("\n", previousEnd - 1) + 1;
                         target = Math.min(previousStart + column, previousEnd);
                     }
                 } else {
-                    int nextStart = document.toString().indexOf("\n", index);
+                    int nextStart = document.indexOf("\n", index);
                     if (nextStart < 0) target = length;
                     else {
                         nextStart++;
-                        int nextEnd = document.toString().indexOf("\n", nextStart);
+                        int nextEnd = document.indexOf("\n", nextStart);
                         if (nextEnd < 0) nextEnd = length;
                         target = Math.min(nextStart + column, nextEnd);
                     }
                 }
             }
-            connection.setSelection(anchor, base + target);
+            int targetAbsolute = base + target;
+            int anchor = Math.max(0, Math.min(limit, selectionAnchorAbsolute));
+            connection.setSelection(anchor, targetAbsolute);
+            selectionAnchorAbsolute = anchor;
+            selectionActiveAbsolute = targetAbsolute;
             return true;
-        } catch (Throwable ignored) {
-            return false;
+        } catch (Throwable ignored) { return false; }
+    }
+
+    public static void resetSelectionSession(DictionaryEditor owner) {
+        DictionaryEditor active = selectionOwner == null ? null : selectionOwner.get();
+        if (owner == null || active == null || active == owner) {
+            selectionOwner = new WeakReference<DictionaryEditor>(null);
+            selectionAnchorAbsolute = -1;
+            selectionActiveAbsolute = -1;
         }
     }
 
-    /** Move HOME/END to actual document boundaries, with Shift-style selection. */
+    /** HOME/END shares the same anchor as repeated arrow-selection. */
     public static boolean moveToBoundary(DictionaryEditor owner, int keyCode) {
         if (owner == null || (keyCode != 122 && keyCode != 123)) return false;
         try {
@@ -156,24 +193,23 @@ public final class ClipboardOrganizer {
             request.hintMaxLines = 100000;
             ExtractedText extracted = connection.getExtractedText(request, 0);
             if (extracted == null || extracted.text == null) return false;
-
             int start = Math.max(0, extracted.startOffset);
             int end = start + extracted.text.length();
             int target = keyCode == 122 ? start : end;
-            // ExtractedText selection offsets are relative to startOffset; InputConnection
-            // requires absolute document offsets. Keeping the absolute anchor is essential
-            // when the editor exposes only a window into a long document.
-            int anchor = start + Math.max(0, extracted.selectionStart);
-            boolean extend = owner.isSelectionModeActive();
-            if (extend) {
-                connection.setSelection(anchor, target);
+            if (owner.isSelectionModeActive()) {
+                DictionaryEditor previous = selectionOwner == null ? null : selectionOwner.get();
+                if (previous != owner || selectionAnchorAbsolute < 0) {
+                    selectionAnchorAbsolute = start + Math.max(0, extracted.selectionEnd);
+                    selectionOwner = new WeakReference<DictionaryEditor>(owner);
+                }
+                connection.setSelection(Math.max(0, Math.min(end, selectionAnchorAbsolute)), target);
+                selectionActiveAbsolute = target;
             } else {
+                resetSelectionSession(owner);
                 connection.setSelection(target, target);
             }
             return true;
-        } catch (Throwable ignored) {
-            return false;
-        }
+        } catch (Throwable ignored) { return false; }
     }
 
     private boolean ensureSchema() {
@@ -341,6 +377,7 @@ public final class ClipboardOrganizer {
         dialog.setView(rootView);
         attachWindow(dialog);
         dialog.show();
+        activeScreen = new WeakReference<ClipboardOrganizer>(this);
         attachWindow(dialog);
         if (dialog.getWindow() != null) {
             dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
@@ -434,14 +471,19 @@ public final class ClipboardOrganizer {
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         search.show();
         attachWindow(search);
+        search.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            public void onCancel(DialogInterface d) { showList(); }
+        });
         search.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        positionInputDialog(search);
         enableDragging(search, searchHandle);
         showKeyboard(query);
     }
 
     private void createFolderDialog() {
+        dismissListDialog();
         final EditText name = makeEditText("اسم المجلد");
         LinearLayout content = new LinearLayout(owner);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -455,14 +497,18 @@ public final class ClipboardOrganizer {
         builder.setPositiveButton("إنشاء", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 String value = name.getText().toString().trim();
-                if (value.length() == 0) { toast("اكتب اسم المجلد"); return; }
-                if (createFolder(value, currentFolderId)) {
-                    toast("تم إنشاء المجلد");
+                if (value.length() == 0) {
+                    toast("اكتب اسم المجلد");
                     showList();
+                    return;
                 }
+                if (createFolder(value, currentFolderId)) toast("تم إنشاء المجلد");
+                showList();
             }
         });
-        builder.setNegativeButton("إلغاء", null);
+        builder.setNegativeButton("إلغاء", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int which) { showList(); }
+        });
         AlertDialog prompt = builder.create();
         attachWindow(prompt);
         prompt.show();
@@ -470,11 +516,16 @@ public final class ClipboardOrganizer {
         prompt.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        positionInputDialog(prompt);
         enableDragging(prompt, handle);
+        prompt.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            public void onCancel(DialogInterface d) { showList(); }
+        });
         showKeyboard(name);
     }
 
     private void renameFolderDialog(final Row row) {
+        dismissListDialog();
         final EditText name = makeEditText("اسم المجلد");
         name.setText(row.text);
         LinearLayout content = new LinearLayout(owner);
@@ -489,7 +540,11 @@ public final class ClipboardOrganizer {
         builder.setPositiveButton("حفظ", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 String value = name.getText().toString().trim();
-                if (value.length() == 0) { toast("اسم المجلد لا يمكن أن يكون فارغاً"); return; }
+                if (value.length() == 0) {
+                    toast("اسم المجلد لا يمكن أن يكون فارغاً");
+                    showList();
+                    return;
+                }
                 SQLiteDatabase db = null;
                 try {
                     db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
@@ -501,7 +556,9 @@ public final class ClipboardOrganizer {
                 finally { if (db != null) try { db.close(); } catch (Exception ignored) {} }
             }
         });
-        builder.setNegativeButton("إلغاء", null);
+        builder.setNegativeButton("إلغاء", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int which) { showList(); }
+        });
         AlertDialog prompt = builder.create();
         attachWindow(prompt);
         prompt.show();
@@ -509,7 +566,11 @@ public final class ClipboardOrganizer {
         prompt.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        positionInputDialog(prompt);
         enableDragging(prompt, handle);
+        prompt.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            public void onCancel(DialogInterface d) { showList(); }
+        });
         showKeyboard(name);
     }
 
@@ -899,29 +960,50 @@ public final class ClipboardOrganizer {
         return getFolderPath(currentFolderId);
     }
 
+    private static boolean isClipboardHistoryEnabled(Context context) {
+        try {
+            return PreferenceManager.getDefaultSharedPreferences(context)
+                    .getBoolean("clipboard_history_enabled", true);
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    private static void stopClipboardMonitor() {
+        try {
+            if (monitoredClipboard != null && clipboardListener != null) {
+                monitoredClipboard.removePrimaryClipChangedListener(clipboardListener);
+            }
+        } catch (Exception ignored) {}
+        monitoredClipboard = null;
+        clipboardListener = null;
+        clipboardOwner = new WeakReference<DictionaryEditor>(null);
+        lastObservedClipSignature = null;
+        resetSelectionSession(null);
+    }
+
     public static void startClipboardMonitor(final DictionaryEditor owner) {
         if (owner == null || Build.VERSION.SDK_INT < 11) return;
+        if (!isClipboardHistoryEnabled(owner)) {
+            stopClipboardMonitor();
+            return;
+        }
         ClipboardOrganizer screen = new ClipboardOrganizer(owner);
         if (!screen.ensureSchema()) return;
         try {
             ClipboardManager manager = (ClipboardManager) owner.getSystemService(Context.CLIPBOARD_SERVICE);
             if (manager == null) return;
-            clipboardOwner = owner;
-            if (monitoredClipboard == manager && clipboardListener != null) {
-                screen.captureCurrentClipboard();
-                return;
-            }
+            clipboardOwner = new WeakReference<DictionaryEditor>(owner);
+            if (monitoredClipboard == manager && clipboardListener != null) { screen.captureCurrentClipboard(); return; }
             if (monitoredClipboard != null && clipboardListener != null) {
-                try { monitoredClipboard.removePrimaryClipChangedListener(clipboardListener); }
-                catch (Exception ignored) {}
+                try { monitoredClipboard.removePrimaryClipChangedListener(clipboardListener); } catch (Exception ignored) {}
             }
             monitoredClipboard = manager;
             clipboardListener = new ClipboardManager.OnPrimaryClipChangedListener() {
                 public void onPrimaryClipChanged() {
-                    DictionaryEditor activeOwner = clipboardOwner;
+                    DictionaryEditor activeOwner = clipboardOwner == null ? null : clipboardOwner.get();
                     ClipboardManager activeManager = monitoredClipboard;
-                    if (activeOwner == null || activeManager == null) return;
-                    new ClipboardOrganizer(activeOwner).savePrimaryClip(activeManager);
+                    if (activeOwner != null && activeManager != null) new ClipboardOrganizer(activeOwner).savePrimaryClip(activeManager);
                 }
             };
             manager.addPrimaryClipChangedListener(clipboardListener);
@@ -938,58 +1020,79 @@ public final class ClipboardOrganizer {
     }
 
     private void savePrimaryClip(ClipboardManager manager) {
-        if (manager == null || Build.VERSION.SDK_INT < 11) return;
-        if (!ensureSchema()) return;
-        SQLiteDatabase db = null;
-        Cursor cursor = null;
+        if (manager == null || Build.VERSION.SDK_INT < 11 || !isClipboardHistoryEnabled(owner)) return;
         try {
             ClipData clip = manager.getPrimaryClip();
             if (clip == null || clip.getItemCount() == 0) return;
-            db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
-            db.beginTransaction();
-
-            // Read the newest stored item once. This avoids one cursor query per
-            // clipboard item and suppresses repeated notifications for the same clip.
-            String lastSaved = null;
-            cursor = db.rawQuery("SELECT note FROM notes ORDER BY rowid DESC LIMIT 1", null);
-            if (cursor.moveToFirst()) lastSaved = cursor.getString(0);
-            cursor.close();
-            cursor = null;
-
-            Set<String> seenInClip = new HashSet<String>();
+            final ArrayList<String> texts = new ArrayList<String>();
             for (int i = 0; i < clip.getItemCount(); i++) {
-                String text;
                 try {
                     CharSequence value = clip.getItemAt(i).coerceToText(owner);
-                    if (value == null) continue;
-                    text = value.toString();
-                } catch (Exception unreadableItem) {
-                    // A URI or malformed item must not prevent later text items
-                    // in the same ClipData from being preserved.
-                    continue;
+                    if (value != null && value.toString().trim().length() > 0 && !texts.contains(value.toString())) texts.add(value.toString());
+                } catch (Exception ignoredItem) {}
+            }
+            if (texts.isEmpty()) return;
+            final String signature = clipSignature(texts);
+            synchronized (ClipboardOrganizer.class) {
+                if (signature.equals(lastObservedClipSignature)) return;
+                lastObservedClipSignature = signature;
+            }
+            final Context context = owner.getApplicationContext() != null ? owner.getApplicationContext() : owner;
+            CLIPBOARD_EXECUTOR.execute(new Runnable() {
+                public void run() {
+                    SQLiteDatabase db = null;
+                    boolean saved = false;
+                    try {
+                        db = context.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
+                        db.beginTransaction();
+                        for (String text : texts) {
+                            ContentValues values = new ContentValues();
+                            values.put("note", text);
+                            values.put("folder_id", ROOT);
+                            if (db.insert("notes", null, values) == -1) throw new IllegalStateException("clipboard insert failed");
+                        }
+                        db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN (SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
+                        db.setTransactionSuccessful();
+                        saved = true;
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (db != null) {
+                            try { if (db.inTransaction()) db.endTransaction(); } catch (Exception ignored) {}
+                            try { db.close(); } catch (Exception ignored) {}
+                        }
+                        if (!saved) synchronized (ClipboardOrganizer.class) { if (signature.equals(lastObservedClipSignature)) lastObservedClipSignature = null; }
+                        else {
+                            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                public void run() {
+                                    ClipboardOrganizer visible = activeScreen == null ? null : activeScreen.get();
+                                    if (visible != null) visible.refreshIfVisible();
+                                }
+                            });
+                        }
+                    }
                 }
-                if (text.trim().length() == 0) continue;
-                if (text.equals(lastSaved) || !seenInClip.add(text)) continue;
+            });
+        } catch (Exception ignored) {}
+    }
 
-                ContentValues values = new ContentValues();
-                values.put("note", text);
-                values.put("folder_id", ROOT);
-                long inserted = db.insert("notes", null, values);
-                if (inserted != -1) lastSaved = text;
+    private static String clipSignature(List<String> texts) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (String text : texts) {
+                byte[] bytes = text.getBytes("UTF-8");
+                digest.update((byte)(bytes.length >>> 24));
+                digest.update((byte)(bytes.length >>> 16));
+                digest.update((byte)(bytes.length >>> 8));
+                digest.update((byte)bytes.length);
+                digest.update(bytes);
             }
-
-            // Keep the existing history limit without touching items in user folders.
-            db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN " +
-                    "(SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
-            db.setTransactionSuccessful();
-        } catch (Exception ignored) {
-            // Clipboard callbacks must never crash the input method.
-        } finally {
-            if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
-            if (db != null) {
-                try { if (db.inTransaction()) db.endTransaction(); } catch (Exception ignored) {}
-                try { db.close(); } catch (Exception ignored) {}
-            }
+            StringBuilder result = new StringBuilder();
+            for (byte value : digest.digest()) result.append(String.format("%02x", value & 0xff));
+            return result.toString();
+        } catch (Exception error) {
+            StringBuilder result = new StringBuilder();
+            for (String text : texts) result.append(text.length()).append(':').append(text).append('|');
+            return result.toString();
         }
     }
 
@@ -1027,6 +1130,50 @@ public final class ClipboardOrganizer {
                         imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
                     }
                 } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void refreshIfVisible() {
+        try {
+            if (dialog == null || !dialog.isShowing()) return;
+            loadRows();
+            if (adapter != null) adapter.notifyDataSetChanged();
+        } catch (RuntimeException ignored) {}
+    }
+
+    private void dismissListDialog() {
+        if (dialog != null) {
+            try { if (dialog.isShowing()) dialog.dismiss(); } catch (Exception ignored) {}
+            dialog = null;
+        }
+    }
+
+    /** Position short input dialogs just above the active keyboard surface. */
+    private void positionInputDialog(final AlertDialog target) {
+        if (target == null || target.getWindow() == null) return;
+        final Window window = target.getWindow();
+        window.getDecorView().post(new Runnable() {
+            public void run() {
+                try {
+                    WindowManager.LayoutParams params = window.getAttributes();
+                    int screenHeight = owner.getResources().getDisplayMetrics().heightPixels;
+                    int screenWidth = owner.getResources().getDisplayMetrics().widthPixels;
+                    int imeHeight = 0;
+                    Dialog imeDialog = owner.getWindow();
+                    if (imeDialog != null && imeDialog.getWindow() != null) {
+                        View decor = imeDialog.getWindow().getDecorView();
+                        if (decor != null) imeHeight = decor.getHeight();
+                    }
+                    int dialogHeight = window.getDecorView().getHeight();
+                    if (dialogHeight <= 0) dialogHeight = dp(112);
+                    params.width = (int)(screenWidth * 0.96f);
+                    params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                    params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                    params.y = Math.max(dp(8), screenHeight - imeHeight - dialogHeight - dp(8));
+                    window.setAttributes(params);
+                    window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+                } catch (RuntimeException ignored) {}
             }
         });
     }
