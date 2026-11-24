@@ -86,6 +86,56 @@ public final class ClipboardOrganizer {
         }
     }
 
+    /** Move one caret step while the keyboard selection modifier is active. */
+    public static boolean moveWithSelection(DictionaryEditor owner, int keyCode) {
+        if (owner == null || keyCode < 19 || keyCode > 22) return false;
+        try {
+            InputConnection connection = owner.getCurrentInputConnection();
+            if (connection == null) return false;
+            ExtractedTextRequest request = new ExtractedTextRequest();
+            request.hintMaxChars = 1000000;
+            request.hintMaxLines = 100000;
+            ExtractedText extracted = connection.getExtractedText(request, 0);
+            if (extracted == null || extracted.text == null) return false;
+            CharSequence document = extracted.text;
+            int base = Math.max(0, extracted.startOffset);
+            int length = document.length();
+            int active = base + Math.max(0, Math.min(length, extracted.selectionEnd));
+            int anchor = base + Math.max(0, Math.min(length, extracted.selectionStart));
+            int index = Math.max(0, Math.min(length, active - base));
+            int target = index;
+            if (keyCode == 21) {
+                target = Math.max(0, index - 1);
+            } else if (keyCode == 22) {
+                target = Math.min(length, index + 1);
+            } else {
+                int lineStart = index == 0 ? 0 : document.toString().lastIndexOf("\n", index - 1) + 1;
+                int column = index - lineStart;
+                if (keyCode == 19) {
+                    if (lineStart == 0) target = 0;
+                    else {
+                        int previousEnd = lineStart - 1;
+                        int previousStart = document.toString().lastIndexOf("\n", previousEnd - 1) + 1;
+                        target = Math.min(previousStart + column, previousEnd);
+                    }
+                } else {
+                    int nextStart = document.toString().indexOf("\n", index);
+                    if (nextStart < 0) target = length;
+                    else {
+                        nextStart++;
+                        int nextEnd = document.toString().indexOf("\n", nextStart);
+                        if (nextEnd < 0) nextEnd = length;
+                        target = Math.min(nextStart + column, nextEnd);
+                    }
+                }
+            }
+            connection.setSelection(anchor, base + target);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     /** Move HOME/END to actual document boundaries, with Shift-style selection. */
     public static boolean moveToBoundary(DictionaryEditor owner, int keyCode) {
         if (owner == null || (keyCode != 122 && keyCode != 123)) return false;
@@ -886,8 +936,8 @@ public final class ClipboardOrganizer {
                 values.put("folder_id", ROOT);
                 db.insert("notes", null, values);
             }
-            db.execSQL("DELETE FROM notes WHERE rowid NOT IN " +
-                    "(SELECT rowid FROM notes ORDER BY rowid DESC LIMIT 500)");
+            db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN " +
+                    "(SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
         } catch (Exception ignored) {
         } finally {
             if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
@@ -929,6 +979,7 @@ public final class ClipboardOrganizer {
             private float downRawY;
             private int startX;
             private int startY;
+            private boolean positioned;
             private Window window;
             public boolean onTouch(View view, MotionEvent event) {
                 try {
@@ -940,14 +991,17 @@ public final class ClipboardOrganizer {
                         downRawY = event.getRawY();
                         int width = owner.getResources().getDisplayMetrics().widthPixels;
                         int height = owner.getResources().getDisplayMetrics().heightPixels;
-                        params.gravity = Gravity.TOP | Gravity.LEFT;
-                        int panelWidth = window.getDecorView().getWidth();
-                        int panelHeight = window.getDecorView().getHeight();
-                        params.x = Math.max(0, (width - panelWidth) / 2);
-                        params.y = Math.max(dp(12), (height - panelHeight) / 3);
+                        if (!positioned) {
+                            params.gravity = Gravity.TOP | Gravity.LEFT;
+                            int panelWidth = window.getDecorView().getWidth();
+                            int panelHeight = window.getDecorView().getHeight();
+                            params.x = Math.max(0, (width - panelWidth) / 2);
+                            params.y = Math.max(dp(12), (height - panelHeight) / 3);
+                            positioned = true;
+                            window.setAttributes(params);
+                        }
                         startX = params.x;
                         startY = params.y;
-                        window.setAttributes(params);
                         return true;
                     }
                     if (event.getAction() == MotionEvent.ACTION_MOVE) {
