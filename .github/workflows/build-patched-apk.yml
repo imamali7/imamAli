@@ -1,0 +1,196 @@
+name: Build patched keyboard APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tools/patch_apk.py"
+      - "tools/patch_bundle.py"
+      - "tools/patch_clipboard_performance.py"
+      - "tools/inspect_keyboard_smali.py"
+      - "tools/export_keyboard_smali.py"
+      - "tools/export_keyboard_resources.py"
+      - "tools/patch_keyboard_requested.py"
+      - "tools/build_clipboard_helper.sh"
+      - "tools/java/**"
+      - "tools/java-stubs/**"
+      - ".github/workflows/build-patched-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patched-keyboard-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Locate and validate original APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find . -maxdepth 1 -type f -iname '*.apk' -print)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "Expected exactly one original APK; found ${#apks[@]}." >&2
+            exit 1
+          fi
+          echo "path=${apks[0]}" >> "$GITHUB_OUTPUT"
+          sha256sum "${apks[0]}" | tee original-apk-sha256.txt
+          unzip -t "${apks[0]}"
+
+      - name: Download APKTool
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
+            --output apktool.jar
+
+      - name: Decode, patch and validate Smali
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py tools/export_keyboard_resources.py tools/patch_keyboard_requested.py
+          java -jar apktool.jar d -f "$APK_PATH" -o decoded
+          python3 tools/patch_apk.py decoded
+          python3 tools/patch_bundle.py decoded
+          python3 tools/patch_clipboard_performance.py decoded
+          python3 tools/inspect_keyboard_smali.py decoded
+          python3 tools/export_keyboard_smali.py decoded
+          python3 tools/export_keyboard_resources.py decoded
+          python3 tools/patch_keyboard_requested.py decoded
+          bash tools/build_clipboard_helper.sh
+          grep -n -A5 -B4 'ClipboardOrganizer;->show' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A5 -B4 'ClipboardOrganizer;->moveToBoundary' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A4 -B4 'safeShowDialog' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A4 -B4 'List;->add(ILjava/lang/Object;)V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor\$20.smali
+          grep -n -A4 -B4 'List;->add(ILjava/lang/Object;)V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor\$17.smali
+
+      - name: Rebuild APK
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar b decoded -o unsigned.apk
+          unzip -t unsigned.apk
+
+      - name: Align and sign debug APK
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
+          "$SDKMANAGER" "build-tools;35.0.0"
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          "$BT/zipalign" -f 4 unsigned.apk aligned.apk
+          "$BT/zipalign" -c -v 4 aligned.apk
+          keytool -genkeypair -v -keystore debug.keystore -storepass android \
+            -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          "$BT/apksigner" sign --ks debug.keystore --ks-pass pass:android \
+            --key-pass pass:android --out keyboard-patched-debug.apk aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs keyboard-patched-debug.apk
+          "$BT/aapt" dump badging keyboard-patched-debug.apk > badging.txt
+          cat badging.txt
+          unzip -t keyboard-patched-debug.apk
+          sha256sum keyboard-patched-debug.apk | tee patched-apk-sha256.txt
+
+      - name: Publish installable APK and Smali map
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyboard-patched-debug-${{ github.run_number }}
+          path: |
+            keyboard-patched-debug.apk
+            original-apk-sha256.txt
+            patched-apk-sha256.txt
+            badging.txt
+            keyboard-smali-map.txt
+            keyboard-core-smali.txt
+            keyboard-ui-resources.txt
+            tools/java/com/android/inputmethod/latin/ClipboardOrganizer.java
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Install and smoke-test on Android emulator
+        timeout-minutes: 20
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ANDROID_I_WANT_MY_TCG: "yes"
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          emulator-boot-timeout: 900
+          emulator-options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none"
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb devices
+            adb wait-for-device
+            adb install -r keyboard-patched-debug.apk
+            # Legacy targetSdk apps may launch Android's permission-review UI after install.
+            # Close that system review surface and grant test-only runtime permissions explicitly.
+            adb shell pm grant com.islamic.org android.permission.READ_CONTACTS || true
+            adb shell pm grant com.islamic.org android.permission.READ_CALL_LOG || true
+            adb shell pm grant com.islamic.org android.permission.WRITE_EXTERNAL_STORAGE || true
+            adb shell pm grant com.islamic.org android.permission.READ_EXTERNAL_STORAGE || true
+            adb shell pm grant com.islamic.org android.permission.RECORD_AUDIO || true
+            # Dismiss any legacy permission-review surface after explicit test grants.
+            adb shell input keyevent 4 || true
+            sleep 1
+            adb shell am force-stop com.islamic.org || true
+            adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
+            adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
+            adb shell am force-stop com.islamic.org || true
+            adb shell am start -W -n com.islamic.org/com.android.inputmethod.latin.BackupPro | tee launch-smoke.txt
+            grep -F "Status: ok" launch-smoke.txt
+            # Android 10 may put the legacy permission-review screen in front of
+            # the first launch. Dismiss it, then launch again and assert our activity.
+            if grep -Fq "ReviewPermissionsActivity" launch-smoke.txt; then
+              adb shell input keyevent 4
+              sleep 2
+              adb shell am start -W -n com.islamic.org/com.android.inputmethod.latin.BackupPro | tee -a launch-smoke.txt
+            fi
+            grep -F "Activity: com.islamic.org/com.android.inputmethod.latin.BackupPro" launch-smoke.txt
+            sleep 3
+            adb shell dumpsys activity activities > activity-smoke.txt
+            grep -F "com.islamic.org/com.android.inputmethod.latin.BackupPro" activity-smoke.txt
+            adb shell am start -a android.settings.SETTINGS
+            adb shell input keyevent 84
+            sleep 1
+            adb shell input text "smoketest"
+            sleep 2
+            adb shell dumpsys input_method > ime-smoke.txt
+            grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
+            adb logcat -d -t 3000 > logcat-smoke.txt
+            if grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt; then
+              exit 1
+            fi
+
+      - name: Upload emulator smoke-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyboard-smoke-evidence-${{ github.run_number }}
+          path: |
+            activity-smoke.txt
+            ime-smoke.txt
+            logcat-smoke.txt
+          if-no-files-found: warn
+          retention-days: 30

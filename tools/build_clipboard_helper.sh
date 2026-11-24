@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$GITHUB_WORKSPACE"
+SDK="$ANDROID_HOME"
+if [ -z "$ROOT" ]; then ROOT="."; fi
+if [ -z "$SDK" ]; then SDK="/usr/local/lib/android/sdk"; fi
+BT="$SDK/build-tools/35.0.0"
+ANDROID_JAR="$SDK/platforms/android-35/android.jar"
+BUILD="$ROOT/.clipboard-helper-build"
+
+rm -rf "$BUILD"
+mkdir -p "$BUILD/classes" "$BUILD/dex" "$BUILD/smali"
+
+if [ ! -f "$ANDROID_JAR" ] || [ ! -x "$BT/d8" ]; then
+  SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+  set +o pipefail
+  yes | "$SDKMANAGER" --licenses >/dev/null
+  set -o pipefail
+  "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+fi
+
+javac -source 7 -target 7 -encoding UTF-8 \
+  -classpath "$ANDROID_JAR" \
+  -d "$BUILD/classes" \
+  tools/java-stubs/com/android/inputmethod/latin/DictionaryEditor.java \
+  tools/java/com/android/inputmethod/latin/ClipboardOrganizer.java
+
+# The stub exists only for javac's symbol resolution; the app already contains this class.
+rm -f "$BUILD/classes/com/android/inputmethod/latin/DictionaryEditor.class"
+
+"$BT/d8" --min-api 8 --lib "$ANDROID_JAR" \
+  --output "$BUILD/dex" \
+  $(find "$BUILD/classes" -type f -name '*.class' -print)
+
+cat > "$BUILD/pom.xml" <<'POM'
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.keyboard</groupId>
+  <artifactId>smali-tools</artifactId>
+  <version>1.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.smali</groupId>
+      <artifactId>baksmali</artifactId>
+      <version>2.5.2</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+mkdir -p "$BUILD/baksmali-libs"
+mvn -q -f "$BUILD/pom.xml" dependency:copy-dependencies -DoutputDirectory="$BUILD/baksmali-libs"
+java -cp "$BUILD/baksmali-libs/*" org.jf.baksmali.Main d "$BUILD/dex/classes.dex" -o "$BUILD/smali"
+
+DEST="decoded/smali/com/android/inputmethod/latin"
+mkdir -p "$DEST"
+find "$BUILD/smali/com/android/inputmethod/latin" -type f -name 'ClipboardOrganizer*.smali' \
+  -exec cp {} "$DEST/" \;
+
+test -f "$DEST/ClipboardOrganizer.smali"
+echo "CLIPBOARD_HELPER_CLASSES=$(find "$DEST" -maxdepth 1 -name 'ClipboardOrganizer*.smali' | wc -l)"
