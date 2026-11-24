@@ -168,7 +168,7 @@ jobs:
                     label = (node.attrib.get("text", "") + " " + node.attrib.get("content-desc", "")).lower()
                     if not any(word in label for word in ("continue", "next", "done", "allow", "review")):
                         continue
-                    match = re.fullmatch(r"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]",
+                    match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]",
                                          node.attrib.get("bounds", ""))
                     if match:
                         x1, y1, x2, y2 = map(int, match.groups())
