@@ -1203,14 +1203,14 @@ public final class ClipboardOrganizer {
                     if (Build.VERSION.SDK_INT >= 21) {
                         owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
                     }
-                    InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
+                    final InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
                     if (imm != null) {
                         imm.restartInput(edit);
                         imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
                         edit.postDelayed(new Runnable() {
                             public void run() {
                                 try {
-                                    if (edit.isAttachedToWindow() && !imm.isAcceptingText()) {
+                                    if (edit.getWindowToken() != null && !imm.isAcceptingText()) {
                                         owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
                                         imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
                                     }
