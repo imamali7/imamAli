@@ -196,7 +196,7 @@ if "ClipboardOrganizer;->startClipboardMonitor" not in start_input_method:
         raise SystemExit("onStartInputView locals anchor changed")
     start_input_method = start_input_method.replace(
         locals_anchor,
-        locals_anchor + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->startClipboardMonitor(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n",
+        locals_anchor + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->resetSelectionSession(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n" + "    invoke-static {p0}, Lcom/android/inputmethod/latin/ClipboardOrganizer;->startClipboardMonitor(Lcom/android/inputmethod/latin/DictionaryEditor;)V\n",
         1
     )
     text = text[:start_input_match.start()] + start_input_method + text[start_input_match.end():]
