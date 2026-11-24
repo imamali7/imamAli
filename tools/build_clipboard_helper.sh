@@ -33,7 +33,25 @@ rm -f "$BUILD/classes/com/android/inputmethod/latin/DictionaryEditor.class"
   --output "$BUILD/dex" \
   $(find "$BUILD/classes" -type f -name '*.class' -print)
 
-java -cp apktool.jar org.jf.baksmali.Main d "$BUILD/dex/classes.dex" -o "$BUILD/smali"
+cat > "$BUILD/pom.xml" <<'POM'
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.keyboard</groupId>
+  <artifactId>smali-tools</artifactId>
+  <version>1.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.smali</groupId>
+      <artifactId>baksmali</artifactId>
+      <version>2.5.2</version>
+    </dependency>
+  </dependencies>
+</project>
+POM
+mkdir -p "$BUILD/baksmali-libs"
+mvn -q -f "$BUILD/pom.xml" dependency:copy-dependencies -DoutputDirectory="$BUILD/baksmali-libs"
+java -cp "$BUILD/baksmali-libs/*" org.jf.baksmali.Main d "$BUILD/dex/classes.dex" -o "$BUILD/smali"
 
 DEST="decoded/smali/com/android/inputmethod/latin"
 mkdir -p "$DEST"
