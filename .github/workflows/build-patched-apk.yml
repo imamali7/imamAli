@@ -12,6 +12,7 @@ on:
       - "tools/export_keyboard_resources.py"
       - "tools/patch_keyboard_requested.py"
       - "tools/patch_keyboard_defaults.py"
+      - "tools/validate_clipboard_engine.py"
       - "tools/build_clipboard_helper.sh"
       - "tools/java/**"
       - "tools/java-stubs/**"
@@ -66,7 +67,7 @@ jobs:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py tools/export_keyboard_resources.py tools/patch_keyboard_requested.py tools/patch_keyboard_defaults.py
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py tools/export_keyboard_resources.py tools/patch_keyboard_requested.py tools/patch_keyboard_defaults.py tools/validate_clipboard_engine.py
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
           python3 tools/patch_bundle.py decoded
@@ -76,6 +77,7 @@ jobs:
           python3 tools/export_keyboard_resources.py decoded
           python3 tools/patch_keyboard_requested.py decoded
           python3 tools/patch_keyboard_defaults.py decoded
+          python3 tools/validate_clipboard_engine.py decoded
           bash tools/build_clipboard_helper.sh
           grep -n -A5 -B4 'ClipboardOrganizer;->show' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A5 -B4 'ClipboardOrganizer;->moveToBoundary' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
