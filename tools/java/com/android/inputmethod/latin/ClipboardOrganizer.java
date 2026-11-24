@@ -459,6 +459,9 @@ public final class ClipboardOrganizer {
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         search.show();
         attachWindow(search);
+        search.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            public void onCancel(DialogInterface d) { showList(); }
+        });
         search.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
@@ -510,6 +513,7 @@ public final class ClipboardOrganizer {
     }
 
     private void renameFolderDialog(final Row row) {
+        dismissListDialog();
         final EditText name = makeEditText("اسم المجلد");
         name.setText(row.text);
         LinearLayout content = new LinearLayout(owner);
@@ -536,7 +540,9 @@ public final class ClipboardOrganizer {
                 finally { if (db != null) try { db.close(); } catch (Exception ignored) {} }
             }
         });
-        builder.setNegativeButton("إلغاء", null);
+        builder.setNegativeButton("إلغاء", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int which) { showList(); }
+        });
         AlertDialog prompt = builder.create();
         attachWindow(prompt);
         prompt.show();
@@ -544,7 +550,11 @@ public final class ClipboardOrganizer {
         prompt.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        positionInputDialog(prompt);
         enableDragging(prompt, handle);
+        prompt.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            public void onCancel(DialogInterface d) { showList(); }
+        });
         showKeyboard(name);
     }
 
