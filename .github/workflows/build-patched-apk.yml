@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "tools/patch_apk.py"
+      - "tools/patch_bundle.py"
       - ".github/workflows/build-patched-apk.yml"
 
 permissions:
@@ -51,15 +52,18 @@ jobs:
             https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
             --output apktool.jar
 
-      - name: Decode and patch Smali
+      - name: Decode, patch and validate Smali
         env:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
+          python3 tools/patch_bundle.py decoded
           grep -n -A10 -B4 'invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A4 -B4 'safeShowDialog' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
 
       - name: Rebuild APK
         run: |
@@ -75,12 +79,14 @@ jobs:
           "$SDKMANAGER" "build-tools;35.0.0"
           BT="$ANDROID_HOME/build-tools/35.0.0"
           "$BT/zipalign" -f 4 unsigned.apk aligned.apk
+          "$BT/zipalign" -c -v 4 aligned.apk
           keytool -genkeypair -v -keystore debug.keystore -storepass android \
             -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
             -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           "$BT/apksigner" sign --ks debug.keystore --ks-pass pass:android \
             --key-pass pass:android --out keyboard-patched-debug.apk aligned.apk
           "$BT/apksigner" verify --verbose --print-certs keyboard-patched-debug.apk
+          "$BT/aapt" dump badging keyboard-patched-debug.apk | head -n 5
           unzip -t keyboard-patched-debug.apk
 
       - name: Upload patched APK and build evidence
