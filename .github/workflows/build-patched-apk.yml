@@ -9,6 +9,7 @@ on:
       - "tools/patch_clipboard_performance.py"
       - "tools/inspect_keyboard_smali.py"
       - "tools/export_keyboard_smali.py"
+      - "tools/export_keyboard_resources.py"
       - ".github/workflows/build-patched-apk.yml"
 
 permissions:
@@ -60,13 +61,14 @@ jobs:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py tools/export_keyboard_resources.py
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
           python3 tools/patch_bundle.py decoded
           python3 tools/patch_clipboard_performance.py decoded
           python3 tools/inspect_keyboard_smali.py decoded
           python3 tools/export_keyboard_smali.py decoded
+          python3 tools/export_keyboard_resources.py decoded
           grep -n -A10 -B4 'invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A4 -B4 'safeShowDialog' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
@@ -112,6 +114,7 @@ jobs:
             badging.txt
             keyboard-smali-map.txt
             keyboard-core-smali.txt
+            keyboard-ui-resources.txt
           if-no-files-found: error
           retention-days: 90
 
