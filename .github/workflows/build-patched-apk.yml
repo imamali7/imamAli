@@ -95,13 +95,27 @@ jobs:
           "$BT/aapt" dump badging keyboard-patched-debug.apk > badging.txt
           cat badging.txt
           unzip -t keyboard-patched-debug.apk
+          sha256sum keyboard-patched-debug.apk | tee patched-apk-sha256.txt
+
+      - name: Publish installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyboard-patched-debug-${{ github.run_number }}
+          path: |
+            keyboard-patched-debug.apk
+            original-apk-sha256.txt
+            patched-apk-sha256.txt
+            badging.txt
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Install and smoke-test on Android emulator
+        timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
           target: default
-          arch: x86
+          arch: x86_64
           profile: pixel_2
           disable-animations: true
           script: |
@@ -125,16 +139,14 @@ jobs:
               exit 1
             fi
 
-      - name: Upload patched APK and build evidence
+      - name: Upload emulator smoke-test evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: keyboard-patched-debug-${{ github.run_number }}
+          name: keyboard-smoke-evidence-${{ github.run_number }}
           path: |
-            keyboard-patched-debug.apk
-            original-apk-sha256.txt
-            badging.txt
             activity-smoke.txt
             ime-smoke.txt
             logcat-smoke.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
