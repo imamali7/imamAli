@@ -144,9 +144,16 @@ jobs:
             adb devices
             adb wait-for-device
             adb install -r keyboard-patched-debug.apk
+            # Legacy targetSdk apps may launch Android's permission-review UI after install.
+            # Close that system review surface and grant test-only runtime permissions explicitly.
+            adb shell am force-stop com.android.permissioncontroller || true
+            for permission in android.permission.READ_CONTACTS android.permission.WRITE_EXTERNAL_STORAGE android.permission.READ_EXTERNAL_STORAGE android.permission.RECORD_AUDIO; do
+              adb shell pm grant com.islamic.org "$permission" || true
+            done
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
-            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro
+            adb shell am force-stop com.islamic.org || true
+            adb shell am start -W -n com.islamic.org/com.android.inputmethod.latin.BackupPro
             sleep 3
             adb shell dumpsys activity activities > activity-smoke.txt
             grep -F "com.android.inputmethod.latin.BackupPro" activity-smoke.txt
