@@ -13,6 +13,7 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.IBinder;
+import android.preference.PreferenceManager;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -528,7 +529,11 @@ public final class ClipboardOrganizer {
         builder.setPositiveButton("حفظ", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 String value = name.getText().toString().trim();
-                if (value.length() == 0) { toast("اسم المجلد لا يمكن أن يكون فارغاً"); return; }
+                if (value.length() == 0) {
+                    toast("اسم المجلد لا يمكن أن يكون فارغاً");
+                    showList();
+                    return;
+                }
                 SQLiteDatabase db = null;
                 try {
                     db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
@@ -944,8 +949,33 @@ public final class ClipboardOrganizer {
         return getFolderPath(currentFolderId);
     }
 
+    private static boolean isClipboardHistoryEnabled(Context context) {
+        try {
+            return PreferenceManager.getDefaultSharedPreferences(context)
+                    .getBoolean("clipboard_history_enabled", true);
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    private static void stopClipboardMonitor() {
+        try {
+            if (monitoredClipboard != null && clipboardListener != null) {
+                monitoredClipboard.removePrimaryClipChangedListener(clipboardListener);
+            }
+        } catch (Exception ignored) {}
+        monitoredClipboard = null;
+        clipboardListener = null;
+        clipboardOwner = new WeakReference<DictionaryEditor>(null);
+        resetSelectionSession(null);
+    }
+
     public static void startClipboardMonitor(final DictionaryEditor owner) {
         if (owner == null || Build.VERSION.SDK_INT < 11) return;
+        if (!isClipboardHistoryEnabled(owner)) {
+            stopClipboardMonitor();
+            return;
+        }
         ClipboardOrganizer screen = new ClipboardOrganizer(owner);
         if (!screen.ensureSchema()) return;
         try {
@@ -978,7 +1008,7 @@ public final class ClipboardOrganizer {
     }
 
     private void savePrimaryClip(ClipboardManager manager) {
-        if (manager == null || Build.VERSION.SDK_INT < 11) return;
+        if (manager == null || Build.VERSION.SDK_INT < 11 || !isClipboardHistoryEnabled(owner)) return;
         try {
             ClipData clip = manager.getPrimaryClip();
             if (clip == null || clip.getItemCount() == 0) return;
