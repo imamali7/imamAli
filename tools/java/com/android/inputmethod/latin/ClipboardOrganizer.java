@@ -3,14 +3,18 @@ package com.android.inputmethod.latin;
 import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.ContentValues;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
@@ -48,6 +52,9 @@ public final class ClipboardOrganizer {
     private static final int COLOR_ACCENT = Color.rgb(0, 150, 136);
     private static final int COLOR_TEXT = Color.WHITE;
     private static final int COLOR_MUTED = Color.rgb(190, 198, 207);
+    private static ClipboardManager monitoredClipboard;
+    private static ClipboardManager.OnPrimaryClipChangedListener clipboardListener;
+    private static DictionaryEditor clipboardOwner;
 
     private final DictionaryEditor owner;
     private AlertDialog dialog;
@@ -72,7 +79,11 @@ public final class ClipboardOrganizer {
     public static void show(DictionaryEditor owner) {
         if (owner == null) return;
         ClipboardOrganizer screen = new ClipboardOrganizer(owner);
-        if (screen.ensureSchema()) screen.showList();
+        if (screen.ensureSchema()) {
+            startClipboardMonitor(owner);
+            screen.captureCurrentClipboard();
+            screen.showList();
+        }
     }
 
     /** Move HOME/END to actual document boundaries, with Shift-style selection. */
@@ -90,10 +101,13 @@ public final class ClipboardOrganizer {
             int start = Math.max(0, extracted.startOffset);
             int end = start + extracted.text.length();
             int target = keyCode == 122 ? start : end;
-            int selectionStart = Math.max(0, extracted.selectionStart);
+            // ExtractedText selection offsets are relative to startOffset; InputConnection
+            // requires absolute document offsets. Keeping the absolute anchor is essential
+            // when the editor exposes only a window into a long document.
+            int anchor = start + Math.max(0, extracted.selectionStart);
             boolean extend = owner.isSelectionModeActive();
             if (extend) {
-                connection.setSelection(selectionStart, target);
+                connection.setSelection(anchor, target);
             } else {
                 connection.setSelection(target, target);
             }
@@ -263,6 +277,13 @@ public final class ClipboardOrganizer {
         attachWindow(dialog);
         dialog.show();
         attachWindow(dialog);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            int screenWidth = owner.getResources().getDisplayMetrics().widthPixels;
+            int screenHeight = owner.getResources().getDisplayMetrics().heightPixels;
+            dialog.getWindow().setLayout((int) (screenWidth * 0.96f), (int) (screenHeight * 0.62f));
+        }
+        enableDragging(dialog, titleView);
     }
 
     private void loadRows() {
@@ -315,9 +336,15 @@ public final class ClipboardOrganizer {
         query.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         query.setPadding(dp(12), dp(8), dp(12), dp(8));
         query.setBackground(roundRect(COLOR_PANEL, dp(8)));
+        LinearLayout searchContent = new LinearLayout(owner);
+        searchContent.setOrientation(LinearLayout.VERTICAL);
+        TextView searchHandle = makeDialogHeader("البحث في الحافظة");
+        searchContent.addView(searchHandle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(42)));
+        searchContent.addView(query, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
         AlertDialog.Builder builder = new AlertDialog.Builder(owner);
-        builder.setTitle("البحث في الحافظة");
-        builder.setView(query);
+        builder.setView(searchContent);
         builder.setPositiveButton("بحث", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 searchQuery = query.getText().toString().trim();
@@ -337,22 +364,24 @@ public final class ClipboardOrganizer {
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         search.show();
         attachWindow(search);
-        query.requestFocus();
-        query.post(new Runnable() {
-            public void run() {
-                try {
-                    InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
-                    if (imm != null) imm.showSoftInput(query, InputMethodManager.SHOW_IMPLICIT);
-                } catch (Exception ignored) {}
-            }
-        });
+        search.getWindow().setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        enableDragging(search, searchHandle);
+        showKeyboard(query);
     }
 
     private void createFolderDialog() {
         final EditText name = makeEditText("اسم المجلد");
+        LinearLayout content = new LinearLayout(owner);
+        content.setOrientation(LinearLayout.VERTICAL);
+        TextView handle = makeDialogHeader("إنشاء مجلد داخل " + currentFolderTitle());
+        content.addView(handle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(42)));
+        content.addView(name, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
         AlertDialog.Builder builder = new AlertDialog.Builder(owner);
-        builder.setTitle("إنشاء مجلد داخل " + currentFolderTitle());
-        builder.setView(name);
+        builder.setView(content);
         builder.setPositiveButton("إنشاء", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 String value = name.getText().toString().trim();
@@ -367,14 +396,26 @@ public final class ClipboardOrganizer {
         AlertDialog prompt = builder.create();
         attachWindow(prompt);
         prompt.show();
+        attachWindow(prompt);
+        prompt.getWindow().setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        enableDragging(prompt, handle);
+        showKeyboard(name);
     }
 
     private void renameFolderDialog(final Row row) {
         final EditText name = makeEditText("اسم المجلد");
         name.setText(row.text);
+        LinearLayout content = new LinearLayout(owner);
+        content.setOrientation(LinearLayout.VERTICAL);
+        TextView handle = makeDialogHeader("إعادة تسمية المجلد");
+        content.addView(handle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(42)));
+        content.addView(name, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
         AlertDialog.Builder builder = new AlertDialog.Builder(owner);
-        builder.setTitle("إعادة تسمية المجلد");
-        builder.setView(name);
+        builder.setView(content);
         builder.setPositiveButton("حفظ", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 String value = name.getText().toString().trim();
@@ -394,6 +435,12 @@ public final class ClipboardOrganizer {
         AlertDialog prompt = builder.create();
         attachWindow(prompt);
         prompt.show();
+        attachWindow(prompt);
+        prompt.getWindow().setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        enableDragging(prompt, handle);
+        showKeyboard(name);
     }
 
     private void showRowMenu(final Row row) {
@@ -780,6 +827,147 @@ public final class ClipboardOrganizer {
     private String currentFolderTitle() {
         if (currentFolderId == ROOT) return "الحافظة";
         return getFolderPath(currentFolderId);
+    }
+
+    private static void startClipboardMonitor(final DictionaryEditor owner) {
+        if (owner == null || Build.VERSION.SDK_INT < 11) return;
+        try {
+            ClipboardManager manager = (ClipboardManager) owner.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (manager == null) return;
+            clipboardOwner = owner;
+            if (monitoredClipboard == manager && clipboardListener != null) return;
+            if (monitoredClipboard != null && clipboardListener != null) {
+                try { monitoredClipboard.removePrimaryClipChangedListener(clipboardListener); }
+                catch (Exception ignored) {}
+            }
+            monitoredClipboard = manager;
+            clipboardListener = new ClipboardManager.OnPrimaryClipChangedListener() {
+                public void onPrimaryClipChanged() {
+                    DictionaryEditor activeOwner = clipboardOwner;
+                    ClipboardManager activeManager = monitoredClipboard;
+                    if (activeOwner == null || activeManager == null) return;
+                    new ClipboardOrganizer(activeOwner).savePrimaryClip(activeManager);
+                }
+            };
+            manager.addPrimaryClipChangedListener(clipboardListener);
+        } catch (Exception ignored) {}
+    }
+
+    private void captureCurrentClipboard() {
+        if (Build.VERSION.SDK_INT < 11) return;
+        try {
+            ClipboardManager manager = (ClipboardManager) owner.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (manager != null) savePrimaryClip(manager);
+        } catch (Exception ignored) {}
+    }
+
+    private void savePrimaryClip(ClipboardManager manager) {
+        if (manager == null || Build.VERSION.SDK_INT < 11) return;
+        ClipData clip = null;
+        SQLiteDatabase db = null;
+        Cursor cursor = null;
+        try {
+            clip = manager.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return;
+            db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                CharSequence value = clip.getItemAt(i).coerceToText(owner);
+                if (value == null) continue;
+                String text = value.toString();
+                if (text.trim().length() == 0) continue;
+                boolean duplicate = false;
+                cursor = db.rawQuery("SELECT note FROM notes ORDER BY rowid DESC LIMIT 1", null);
+                if (cursor.moveToFirst()) duplicate = text.equals(cursor.getString(0));
+                cursor.close();
+                cursor = null;
+                if (duplicate) continue;
+                ContentValues values = new ContentValues();
+                values.put("note", text);
+                values.put("folder_id", ROOT);
+                db.insert("notes", null, values);
+            }
+            db.execSQL("DELETE FROM notes WHERE rowid NOT IN " +
+                    "(SELECT rowid FROM notes ORDER BY rowid DESC LIMIT 500)");
+        } catch (Exception ignored) {
+        } finally {
+            if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
+            if (db != null) try { db.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private TextView makeDialogHeader(String title) {
+        TextView header = new TextView(owner);
+        header.setText(title);
+        header.setTextColor(COLOR_TEXT);
+        header.setTextSize(15);
+        header.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(12), dp(4), dp(12), dp(4));
+        header.setBackground(roundRect(COLOR_ACCENT, dp(8)));
+        header.setFocusable(false);
+        return header;
+    }
+
+    private void showKeyboard(final EditText edit) {
+        if (edit == null) return;
+        edit.setFocusable(true);
+        edit.setFocusableInTouchMode(true);
+        edit.requestFocus();
+        edit.post(new Runnable() {
+            public void run() {
+                try {
+                    InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (imm != null) imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void enableDragging(final Dialog target, final View handle) {
+        if (target == null || handle == null) return;
+        handle.setOnTouchListener(new View.OnTouchListener() {
+            private float downRawX;
+            private float downRawY;
+            private int startX;
+            private int startY;
+            private Window window;
+            public boolean onTouch(View view, MotionEvent event) {
+                try {
+                    if (window == null) window = target.getWindow();
+                    if (window == null) return false;
+                    WindowManager.LayoutParams params = window.getAttributes();
+                    if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        int width = owner.getResources().getDisplayMetrics().widthPixels;
+                        int height = owner.getResources().getDisplayMetrics().heightPixels;
+                        params.gravity = Gravity.TOP | Gravity.LEFT;
+                        int panelWidth = window.getDecorView().getWidth();
+                        int panelHeight = window.getDecorView().getHeight();
+                        params.x = Math.max(0, (width - panelWidth) / 2);
+                        params.y = Math.max(dp(12), (height - panelHeight) / 3);
+                        startX = params.x;
+                        startY = params.y;
+                        window.setAttributes(params);
+                        return true;
+                    }
+                    if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                        int width = owner.getResources().getDisplayMetrics().widthPixels;
+                        int height = owner.getResources().getDisplayMetrics().heightPixels;
+                        int panelWidth = window.getDecorView().getWidth();
+                        int panelHeight = window.getDecorView().getHeight();
+                        params.x = Math.max(0, Math.min(width - panelWidth,
+                                startX + Math.round(event.getRawX() - downRawX)));
+                        params.y = Math.max(0, Math.min(height - panelHeight,
+                                startY + Math.round(event.getRawY() - downRawY)));
+                        window.setAttributes(params);
+                        return true;
+                    }
+                    if (event.getAction() == MotionEvent.ACTION_UP ||
+                            event.getAction() == MotionEvent.ACTION_CANCEL) return true;
+                } catch (Exception ignored) {}
+                return false;
+            }
+        });
     }
 
     private EditText makeEditText(String hint) {
