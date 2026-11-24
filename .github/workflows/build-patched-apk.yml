@@ -267,15 +267,13 @@ jobs:
       - name: Set up Android build tools and sign APK
         uses: android-actions/setup-android@v3
         with:
-          packages: |
-            platform-tools
-            build-tools;35.0.0
-            platforms;android-35
+          packages: platform-tools
 
       - name: Align, sign, and verify
         shell: bash
         run: |
           set -euo pipefail
+          sdkmanager "build-tools;35.0.0" "platforms;android-35"
           BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
           "$BUILD_TOOLS/zipalign" -p -f 4 output/IslamicKeyboard-unsigned.apk output/IslamicKeyboard-aligned.apk
           keytool -genkeypair -v -keystore output/debug-signing.keystore \
