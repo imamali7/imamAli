@@ -1,4 +1,5 @@
 name: Build patched Islamic Keyboard APK
+# Build definition updated after fixing the patch script.
 
 on:
   workflow_dispatch:
