@@ -1,0 +1,89 @@
+name: Decompile Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**.apk"
+      - ".github/workflows/decompile-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apk-decompile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Validate APK and record metadata
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find . -maxdepth 1 -type f -iname '*.apk' -print)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "Expected exactly one APK in repository root; found ${#apks[@]}." >&2
+            exit 1
+          fi
+          APK="${apks[0]}"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          mkdir -p output
+          {
+            echo "APK: $APK"
+            stat "$APK"
+            sha256sum "$APK"
+            file "$APK"
+          } | tee output/apk-metadata.txt
+          unzip -t "$APK" > output/zip-validation.txt
+
+      - name: Download APKTool
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar \
+            --output apktool.jar
+
+      - name: Decode resources and Smali with APKTool
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar d -f "$APK_PATH" -o output/apktool
+
+      - name: Download JADX
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/skylot/jadx/releases/download/v1.5.1/jadx-1.5.1.zip \
+            --output jadx.zip
+          unzip -q jadx.zip -d jadx-dist
+          chmod +x jadx-dist/bin/jadx
+
+      - name: Decompile DEX to Java source with JADX
+        env:
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          jadx-dist/bin/jadx --show-bad-code --deobf -d output/jadx "$APK_PATH"
+
+      - name: Upload decompilation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-decompilation-${{ github.run_number }}
+          path: output/
+          if-no-files-found: warn
+          retention-days: 14
