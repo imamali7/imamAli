@@ -186,5 +186,9 @@ if "ClipboardOrganizer;->startClipboardMonitor" not in start_input_method:
     )
     text = text[:start_input_match.start()] + start_input_method + text[start_input_match.end():]
 
+# Keep every Smali method terminator on its own line. Earlier method slicing can
+# otherwise join the next instruction to ".end method" and make Apktool reject it.
+text = re.sub(r"(?m)^\\.end method(?=[^\\r\\n])", ".end method\\n", text)
+
 path.write_text(text, encoding="utf-8")
 print("Patched clipboard UI entry point, cursor boundaries, arrow composition reset, and selection tracking.")
