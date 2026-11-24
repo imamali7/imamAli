@@ -59,7 +59,8 @@ jobs:
           set -euo pipefail
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
-          grep -n -A12 -B4 'Build the reversed display list once' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A10 -B4 'invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
+          grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
 
       - name: Rebuild APK
         run: |
