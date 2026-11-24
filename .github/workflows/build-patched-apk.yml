@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
@@ -92,6 +92,35 @@ jobs:
           cat badging.txt
           unzip -t keyboard-patched-debug.apk
 
+      - name: Install and smoke-test on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb install -r keyboard-patched-debug.apk
+            adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
+            adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
+            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro
+            sleep 3
+            adb shell dumpsys activity activities > activity-smoke.txt
+            grep -F "com.android.inputmethod.latin.BackupPro" activity-smoke.txt
+            adb shell am start -a android.settings.SETTINGS
+            adb shell input keyevent 84
+            sleep 1
+            adb shell input text "smoketest"
+            sleep 2
+            adb shell dumpsys input_method > ime-smoke.txt
+            grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
+            adb logcat -d -t 3000 > logcat-smoke.txt
+            if grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt; then
+              exit 1
+            fi
+
       - name: Upload patched APK and build evidence
         uses: actions/upload-artifact@v4
         with:
@@ -100,5 +129,8 @@ jobs:
             keyboard-patched-debug.apk
             original-apk-sha256.txt
             badging.txt
+            activity-smoke.txt
+            ime-smoke.txt
+            logcat-smoke.txt
           if-no-files-found: error
           retention-days: 30
