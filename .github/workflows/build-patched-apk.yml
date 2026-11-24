@@ -162,19 +162,16 @@ jobs:
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
-            adb shell am start -W -n com.islamic.org/com.android.inputmethod.latin.BackupPro | tee launch-smoke.txt
-            grep -F "Status: ok" launch-smoke.txt
-            # Android 10 can keep presenting the legacy permission-review
-            # activity for this targetSdk=14 package even after pm grant. Treat
-            # that system surface as expected and verify the IME service directly.
-            if grep -Fq "ReviewPermissionsActivity" launch-smoke.txt; then
-              adb shell input keyevent 4 || true
-              sleep 2
-            else
-              grep -F "Activity: com.islamic.org/com.android.inputmethod.latin.BackupPro" launch-smoke.txt
-            fi
+            # First launch may be intercepted by Android 10's legacy permission-review UI.
+            # Dismiss it and launch the actual app without -W (which times out on that system UI).
+            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro || true
             sleep 2
+            adb shell input keyevent 4 || true
+            sleep 2
+            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro
+            sleep 3
             adb shell dumpsys activity activities > activity-smoke.txt
+            grep -F "com.islamic.org/com.android.inputmethod.latin.BackupPro" activity-smoke.txt
             adb shell dumpsys input_method > ime-smoke.txt
             grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
             adb shell am start -a android.settings.SETTINGS
