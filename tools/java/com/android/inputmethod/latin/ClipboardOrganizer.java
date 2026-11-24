@@ -41,6 +41,10 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.lang.ref.WeakReference;
+import java.security.MessageDigest;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Clipboard UI and folder storage for the legacy keyboard.
@@ -56,7 +60,12 @@ public final class ClipboardOrganizer {
     private static final int COLOR_MUTED = Color.rgb(190, 198, 207);
     private static ClipboardManager monitoredClipboard;
     private static ClipboardManager.OnPrimaryClipChangedListener clipboardListener;
-    private static DictionaryEditor clipboardOwner;
+    private static WeakReference<DictionaryEditor> clipboardOwner = new WeakReference<DictionaryEditor>(null);
+    private static final ExecutorService CLIPBOARD_EXECUTOR = Executors.newSingleThreadExecutor();
+    private static String lastObservedClipSignature;
+    private static WeakReference<DictionaryEditor> selectionOwner = new WeakReference<DictionaryEditor>(null);
+    private static int selectionAnchorAbsolute = -1;
+    private static int selectionActiveAbsolute = -1;
 
     private final DictionaryEditor owner;
     private AlertDialog dialog;
@@ -906,22 +915,17 @@ public final class ClipboardOrganizer {
         try {
             ClipboardManager manager = (ClipboardManager) owner.getSystemService(Context.CLIPBOARD_SERVICE);
             if (manager == null) return;
-            clipboardOwner = owner;
-            if (monitoredClipboard == manager && clipboardListener != null) {
-                screen.captureCurrentClipboard();
-                return;
-            }
+            clipboardOwner = new WeakReference<DictionaryEditor>(owner);
+            if (monitoredClipboard == manager && clipboardListener != null) { screen.captureCurrentClipboard(); return; }
             if (monitoredClipboard != null && clipboardListener != null) {
-                try { monitoredClipboard.removePrimaryClipChangedListener(clipboardListener); }
-                catch (Exception ignored) {}
+                try { monitoredClipboard.removePrimaryClipChangedListener(clipboardListener); } catch (Exception ignored) {}
             }
             monitoredClipboard = manager;
             clipboardListener = new ClipboardManager.OnPrimaryClipChangedListener() {
                 public void onPrimaryClipChanged() {
-                    DictionaryEditor activeOwner = clipboardOwner;
+                    DictionaryEditor activeOwner = clipboardOwner == null ? null : clipboardOwner.get();
                     ClipboardManager activeManager = monitoredClipboard;
-                    if (activeOwner == null || activeManager == null) return;
-                    new ClipboardOrganizer(activeOwner).savePrimaryClip(activeManager);
+                    if (activeOwner != null && activeManager != null) new ClipboardOrganizer(activeOwner).savePrimaryClip(activeManager);
                 }
             };
             manager.addPrimaryClipChangedListener(clipboardListener);
@@ -939,57 +943,70 @@ public final class ClipboardOrganizer {
 
     private void savePrimaryClip(ClipboardManager manager) {
         if (manager == null || Build.VERSION.SDK_INT < 11) return;
-        if (!ensureSchema()) return;
-        SQLiteDatabase db = null;
-        Cursor cursor = null;
         try {
             ClipData clip = manager.getPrimaryClip();
             if (clip == null || clip.getItemCount() == 0) return;
-            db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
-            db.beginTransaction();
-
-            // Read the newest stored item once. This avoids one cursor query per
-            // clipboard item and suppresses repeated notifications for the same clip.
-            String lastSaved = null;
-            cursor = db.rawQuery("SELECT note FROM notes ORDER BY rowid DESC LIMIT 1", null);
-            if (cursor.moveToFirst()) lastSaved = cursor.getString(0);
-            cursor.close();
-            cursor = null;
-
-            Set<String> seenInClip = new HashSet<String>();
+            final ArrayList<String> texts = new ArrayList<String>();
             for (int i = 0; i < clip.getItemCount(); i++) {
-                String text;
                 try {
                     CharSequence value = clip.getItemAt(i).coerceToText(owner);
-                    if (value == null) continue;
-                    text = value.toString();
-                } catch (Exception unreadableItem) {
-                    // A URI or malformed item must not prevent later text items
-                    // in the same ClipData from being preserved.
-                    continue;
+                    if (value != null && value.toString().trim().length() > 0 && !texts.contains(value.toString())) texts.add(value.toString());
+                } catch (Exception ignoredItem) {}
+            }
+            if (texts.isEmpty()) return;
+            final String signature = clipSignature(texts);
+            synchronized (ClipboardOrganizer.class) {
+                if (signature.equals(lastObservedClipSignature)) return;
+                lastObservedClipSignature = signature;
+            }
+            final Context context = owner.getApplicationContext() != null ? owner.getApplicationContext() : owner;
+            CLIPBOARD_EXECUTOR.execute(new Runnable() {
+                public void run() {
+                    SQLiteDatabase db = null;
+                    boolean saved = false;
+                    try {
+                        db = context.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
+                        db.beginTransaction();
+                        for (String text : texts) {
+                            ContentValues values = new ContentValues();
+                            values.put("note", text);
+                            values.put("folder_id", ROOT);
+                            if (db.insert("notes", null, values) == -1) throw new IllegalStateException("clipboard insert failed");
+                        }
+                        db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN (SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
+                        db.setTransactionSuccessful();
+                        saved = true;
+                    } catch (Exception ignored) {
+                    } finally {
+                        if (db != null) {
+                            try { if (db.inTransaction()) db.endTransaction(); } catch (Exception ignored) {}
+                            try { db.close(); } catch (Exception ignored) {}
+                        }
+                        if (!saved) synchronized (ClipboardOrganizer.class) { if (signature.equals(lastObservedClipSignature)) lastObservedClipSignature = null; }
+                    }
                 }
-                if (text.trim().length() == 0) continue;
-                if (text.equals(lastSaved) || !seenInClip.add(text)) continue;
+            });
+        } catch (Exception ignored) {}
+    }
 
-                ContentValues values = new ContentValues();
-                values.put("note", text);
-                values.put("folder_id", ROOT);
-                long inserted = db.insert("notes", null, values);
-                if (inserted != -1) lastSaved = text;
+    private static String clipSignature(List<String> texts) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (String text : texts) {
+                byte[] bytes = text.getBytes("UTF-8");
+                digest.update((byte)(bytes.length >>> 24));
+                digest.update((byte)(bytes.length >>> 16));
+                digest.update((byte)(bytes.length >>> 8));
+                digest.update((byte)bytes.length);
+                digest.update(bytes);
             }
-
-            // Keep the existing history limit without touching items in user folders.
-            db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN " +
-                    "(SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
-            db.setTransactionSuccessful();
-        } catch (Exception ignored) {
-            // Clipboard callbacks must never crash the input method.
-        } finally {
-            if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
-            if (db != null) {
-                try { if (db.inTransaction()) db.endTransaction(); } catch (Exception ignored) {}
-                try { db.close(); } catch (Exception ignored) {}
-            }
+            StringBuilder result = new StringBuilder();
+            for (byte value : digest.digest()) result.append(String.format("%02x", value & 0xff));
+            return result.toString();
+        } catch (Exception error) {
+            StringBuilder result = new StringBuilder();
+            for (String text : texts) result.append(text.length()).append(':').append(text).append('|');
+            return result.toString();
         }
     }
 
