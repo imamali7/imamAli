@@ -7,6 +7,7 @@ on:
       - "tools/patch_apk.py"
       - "tools/patch_bundle.py"
       - "tools/patch_clipboard_performance.py"
+      - "tools/inspect_keyboard_smali.py"
       - ".github/workflows/build-patched-apk.yml"
 
 permissions:
@@ -58,11 +59,12 @@ jobs:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
           python3 tools/patch_bundle.py decoded
           python3 tools/patch_clipboard_performance.py decoded
+          python3 tools/inspect_keyboard_smali.py decoded
           grep -n -A10 -B4 'invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A10 -B4 'invoke-interface {v0}, Landroid/database/Cursor;->close()V' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
           grep -n -A4 -B4 'safeShowDialog' decoded/smali/com/android/inputmethod/latin/DictionaryEditor.smali
@@ -97,7 +99,7 @@ jobs:
           unzip -t keyboard-patched-debug.apk
           sha256sum keyboard-patched-debug.apk | tee patched-apk-sha256.txt
 
-      - name: Publish installable APK
+      - name: Publish installable APK and Smali map
         uses: actions/upload-artifact@v4
         with:
           name: keyboard-patched-debug-${{ github.run_number }}
@@ -106,20 +108,25 @@ jobs:
             original-apk-sha256.txt
             patched-apk-sha256.txt
             badging.txt
+            keyboard-smali-map.txt
           if-no-files-found: error
           retention-days: 90
 
       - name: Install and smoke-test on Android emulator
-        timeout-minutes: 15
+        timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
           target: default
           arch: x86_64
           profile: pixel_2
+          emulator-boot-timeout: 900
+          emulator-options: "-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none"
           disable-animations: true
           script: |
             set -euo pipefail
+            adb devices
+            adb wait-for-device
             adb install -r keyboard-patched-debug.apk
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
