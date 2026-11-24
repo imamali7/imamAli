@@ -198,6 +198,12 @@ public final class ClipboardOrganizer {
 
     private void showList() {
         if (!ensureSchema()) return;
+        // Rebuild the list in place instead of stacking a new clipboard window over
+        // the previous one after folder, search, move, rename or delete operations.
+        if (dialog != null) {
+            try { if (dialog.isShowing()) dialog.dismiss(); } catch (Exception ignored) {}
+            dialog = null;
+        }
         loadRows();
 
         rootView = new LinearLayout(owner);
@@ -1110,7 +1116,8 @@ public final class ClipboardOrganizer {
             lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
             lp.flags &= ~WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
             lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
-            lp.gravity = Gravity.TOP | Gravity.LEFT;
+            // Keep the platform's centered initial placement. The drag handler switches
+            // to TOP|LEFT coordinates only after the user starts dragging the handle.
             window.setAttributes(lp);
         } catch (Exception ignored) {}
     }
