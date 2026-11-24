@@ -879,13 +879,18 @@ public final class ClipboardOrganizer {
         return getFolderPath(currentFolderId);
     }
 
-    private static void startClipboardMonitor(final DictionaryEditor owner) {
+    public static void startClipboardMonitor(final DictionaryEditor owner) {
         if (owner == null || Build.VERSION.SDK_INT < 11) return;
+        ClipboardOrganizer screen = new ClipboardOrganizer(owner);
+        if (!screen.ensureSchema()) return;
         try {
             ClipboardManager manager = (ClipboardManager) owner.getSystemService(Context.CLIPBOARD_SERVICE);
             if (manager == null) return;
             clipboardOwner = owner;
-            if (monitoredClipboard == manager && clipboardListener != null) return;
+            if (monitoredClipboard == manager && clipboardListener != null) {
+                screen.captureCurrentClipboard();
+                return;
+            }
             if (monitoredClipboard != null && clipboardListener != null) {
                 try { monitoredClipboard.removePrimaryClipChangedListener(clipboardListener); }
                 catch (Exception ignored) {}
@@ -900,6 +905,7 @@ public final class ClipboardOrganizer {
                 }
             };
             manager.addPrimaryClipChangedListener(clipboardListener);
+            screen.captureCurrentClipboard();
         } catch (Exception ignored) {}
     }
 
