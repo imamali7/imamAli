@@ -151,10 +151,35 @@ jobs:
             adb shell pm grant com.islamic.org android.permission.WRITE_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.READ_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.RECORD_AUDIO || true
-            # Dismiss Android 10's legacy-permission review task if installation created it.
-            adb shell am force-stop com.android.permissioncontroller || true
-            adb shell input keyevent 4 || true
-            adb shell input keyevent 4 || true
+            # Android 10 may show a legacy-permission review screen on first launch.
+            # Find and tap its accessible action by label; avoid brittle fixed coordinates.
+            python3 - <<'PY'
+            import subprocess, time, re, xml.etree.ElementTree as ET
+            for _ in range(6):
+                subprocess.run(["adb", "shell", "uiautomator", "dump", "/sdcard/review.xml"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    xml = subprocess.check_output(["adb", "shell", "cat", "/sdcard/review.xml"], text=True)
+                    root = ET.fromstring(xml)
+                except Exception:
+                    break
+                tapped = False
+                for node in root.iter("node"):
+                    label = (node.attrib.get("text", "") + " " + node.attrib.get("content-desc", "")).lower()
+                    if not any(word in label for word in ("continue", "next", "done", "allow", "review")):
+                        continue
+                    match = re.fullmatch(r"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]",
+                                         node.attrib.get("bounds", ""))
+                    if match:
+                        x1, y1, x2, y2 = map(int, match.groups())
+                        subprocess.run(["adb", "shell", "input", "tap",
+                                        str((x1+x2)//2), str((y1+y2)//2)])
+                        tapped = True
+                        time.sleep(1)
+                        break
+                if not tapped:
+                    break
+            PY
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
