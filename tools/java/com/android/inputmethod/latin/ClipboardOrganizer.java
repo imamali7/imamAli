@@ -1009,10 +1009,7 @@ public final class ClipboardOrganizer {
                     // Wait until the attached dialog has a window token and has completed
                     // its first layout; otherwise Android may route the request to the
                     // editor behind the panel and leave the IME hidden behind the dialog.
-                    if (edit.getWindowToken() == null) {
-                        edit.post(this);
-                        return;
-                    }
+                    if (edit.getWindowToken() == null) return;
                     if (Build.VERSION.SDK_INT >= 21) {
                         owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
                     }
