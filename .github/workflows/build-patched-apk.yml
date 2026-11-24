@@ -159,6 +159,16 @@ jobs:
           )
           layout.write_text(text, encoding="utf-8")
 
+          # Normalize the APK's legacy custom-attribute namespace for AAPT2.
+          legacy_namespace = "http://schemas.android.com/apk/res/inputmethod.latin.perfectkeyboard"
+          for resource_xml in (root / "res").rglob("*.xml"):
+              xml_text = resource_xml.read_text(encoding="utf-8")
+              if legacy_namespace in xml_text:
+                  resource_xml.write_text(
+                      xml_text.replace(legacy_namespace, "http://schemas.android.com/apk/res-auto"),
+                      encoding="utf-8",
+                  )
+
           drag_listener = root / "smali/com/android/inputmethod/latin/DictionaryEditor$ClipboardDragListener.smali"
           drag_listener.write_text("""          .class Lcom/android/inputmethod/latin/DictionaryEditor$ClipboardDragListener;
           .super Ljava/lang/Object;
