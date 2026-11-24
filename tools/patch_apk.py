@@ -6,20 +6,10 @@ import sys
 TARGET = Path(sys.argv[1]) / "smali/com/android/inputmethod/latin/DictionaryEditor.smali"
 text = TARGET.read_text(encoding="utf-8")
 
-startup = """    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbcreate()V
-
-    .line 215
-    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V
-    const-string v2, "SK"
-"""
-startup_replacement = """    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbcreate()V
-
-    # Clipboard history is loaded on demand when its panel is opened.
-    const-string v2, "SK"
-"""
-if text.count(startup) != 1:
-    raise SystemExit(f"Expected one constructor startup dbload call; found {text.count(startup)}")
-text = text.replace(startup, startup_replacement, 1)
+startup_call = "    invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->dbload()V"
+if text.count(startup_call) != 1:
+    raise SystemExit(f"Expected exactly one eager startup dbload call; found {text.count(startup_call)}")
+text = text.replace(startup_call, "    # Clipboard history is loaded only when its panel is opened.", 1)
 
 panel = """.method po1()V
     .locals 8
