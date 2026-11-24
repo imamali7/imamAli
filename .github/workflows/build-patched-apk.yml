@@ -13,6 +13,7 @@ on:
       - "tools/patch_keyboard_requested.py"
       - "tools/patch_keyboard_defaults.py"
       - "tools/validate_clipboard_engine.py"
+      - "tools/accept_legacy_permission_review.py"
       - "tools/build_clipboard_helper.sh"
       - "tools/java/**"
       - "tools/java-stubs/**"
@@ -67,7 +68,7 @@ jobs:
           APK_PATH: ${{ steps.apk.outputs.path }}
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py tools/export_keyboard_resources.py tools/patch_keyboard_requested.py tools/patch_keyboard_defaults.py tools/validate_clipboard_engine.py
+          python3 -m py_compile tools/patch_apk.py tools/patch_bundle.py tools/patch_clipboard_performance.py tools/inspect_keyboard_smali.py tools/export_keyboard_smali.py tools/export_keyboard_resources.py tools/patch_keyboard_requested.py tools/patch_keyboard_defaults.py tools/validate_clipboard_engine.py tools/accept_legacy_permission_review.py
           java -jar apktool.jar d -f "$APK_PATH" -o decoded
           python3 tools/patch_apk.py decoded
           python3 tools/patch_bundle.py decoded
@@ -130,6 +131,24 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Preinstall Android emulator with retry
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
+          for attempt in 1 2 3; do
+            if "$SDKMANAGER" --install emulator --channel=0; then
+              test -x "$ANDROID_HOME/emulator/emulator"
+              exit 0
+            fi
+            rm -rf "$ANDROID_HOME/emulator"
+            sleep 15
+          done
+          echo "Android Emulator SDK package could not be installed after three attempts." >&2
+          exit 1
+
       - name: Install and smoke-test on Android emulator
         timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
@@ -155,26 +174,17 @@ jobs:
             adb shell pm grant com.islamic.org android.permission.WRITE_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.READ_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.RECORD_AUDIO || true
-            # Dismiss any legacy permission-review surface after explicit test grants.
-            adb shell input keyevent 4 || true
-            sleep 1
             adb shell am force-stop com.islamic.org || true
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
-            adb shell am start -W -n com.islamic.org/com.android.inputmethod.latin.BackupPro | tee launch-smoke.txt
-            grep -F "Status: ok" launch-smoke.txt
-            # Android 10 can keep presenting the legacy permission-review
-            # activity for this targetSdk=14 package even after pm grant. Treat
-            # that system surface as expected and verify the IME service directly.
-            if grep -Fq "ReviewPermissionsActivity" launch-smoke.txt; then
-              adb shell input keyevent 4 || true
-              sleep 2
-            else
-              grep -F "Activity: com.islamic.org/com.android.inputmethod.latin.BackupPro" launch-smoke.txt
-            fi
+            # Android 10 requires explicit acceptance of the legacy-permission review UI.
+            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro || true
             sleep 2
+            python3 tools/accept_legacy_permission_review.py
+            sleep 3
             adb shell dumpsys activity activities > activity-smoke.txt
+            grep -F "com.islamic.org/com.android.inputmethod.latin.BackupPro" activity-smoke.txt
             adb shell dumpsys input_method > ime-smoke.txt
             grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
             adb shell am start -a android.settings.SETTINGS
@@ -185,9 +195,7 @@ jobs:
             adb shell dumpsys input_method > ime-smoke.txt
             grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
             adb logcat -d -t 3000 > logcat-smoke.txt
-            if grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt; then
-              exit 1
-            fi
+            ! grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt
 
       - name: Upload emulator smoke-test evidence
         if: always()
@@ -196,6 +204,7 @@ jobs:
           name: keyboard-smoke-evidence-${{ github.run_number }}
           path: |
             activity-smoke.txt
+            legacy-permission-review-ui.xml
             ime-smoke.txt
             logcat-smoke.txt
           if-no-files-found: warn

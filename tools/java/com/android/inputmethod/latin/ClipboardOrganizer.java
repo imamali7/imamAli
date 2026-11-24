@@ -67,6 +67,7 @@ public final class ClipboardOrganizer {
     private static WeakReference<ClipboardOrganizer> activeScreen = new WeakReference<ClipboardOrganizer>(null);
     private static final ExecutorService CLIPBOARD_EXECUTOR = Executors.newSingleThreadExecutor();
     private static String lastObservedClipSignature;
+    private static volatile String lastCaptureStatus = "جاهز لحفظ النصوص المنسوخة";
     private static WeakReference<DictionaryEditor> selectionOwner = new WeakReference<DictionaryEditor>(null);
     private static int selectionAnchorAbsolute = -1;
     private static int selectionActiveAbsolute = -1;
@@ -86,6 +87,8 @@ public final class ClipboardOrganizer {
     private TextView titleView;
     private ListView listView;
     private RowAdapter adapter;
+    private TextView statusView;
+    private boolean restoreKeyboardOnDismiss = true;
 
     private ClipboardOrganizer(DictionaryEditor owner) {
         this.owner = owner;
@@ -264,6 +267,15 @@ public final class ClipboardOrganizer {
         titleView.setTextSize(17);
         titleView.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         toolbar.addView(titleView, new LinearLayout.LayoutParams(0, dp(46), 1));
+        addButton(toolbar, "تحديث", new Runnable() {
+            public void run() {
+                captureCurrentClipboard();
+                toast("جارٍ تحديث الحافظة");
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    public void run() { refreshIfVisible(); }
+                }, 500);
+            }
+        });
 
         if (parents.size() > 0 && searchQuery == null) {
             addButton(toolbar, "رجوع", new Runnable() {
@@ -358,23 +370,79 @@ public final class ClipboardOrganizer {
                 return true;
             }
         });
-        rootView.addView(listView, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams contentHeight = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1);
+        rootView.addView(listView, contentHeight);
+
+        LinearLayout empty = new LinearLayout(owner);
+        empty.setOrientation(LinearLayout.VERTICAL);
+        empty.setGravity(Gravity.CENTER);
+        empty.setPadding(dp(22), dp(18), dp(22), dp(18));
+        empty.setBackground(roundRect(COLOR_PANEL, dp(12)));
+        TextView emptyIcon = new TextView(owner);
+        emptyIcon.setText("📋");
+        emptyIcon.setTextSize(38);
+        emptyIcon.setGravity(Gravity.CENTER);
+        empty.addView(emptyIcon, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58)));
+        TextView emptyTitle = new TextView(owner);
+        emptyTitle.setText("لا توجد نصوص محفوظة هنا");
+        emptyTitle.setTextColor(COLOR_TEXT);
+        emptyTitle.setTextSize(17);
+        emptyTitle.setGravity(Gravity.CENTER);
+        empty.addView(emptyTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(42)));
+        TextView emptyHint = new TextView(owner);
+        emptyHint.setText("انسخ نصاً من أي تطبيق، وستظهر النسخة هنا تلقائياً. يمكنك أيضاً استيراد النص الموجود حالياً في حافظة الهاتف.");
+        emptyHint.setTextColor(COLOR_MUTED);
+        emptyHint.setTextSize(13);
+        emptyHint.setGravity(Gravity.CENTER);
+        emptyHint.setPadding(dp(8), dp(4), dp(8), dp(12));
+        empty.addView(emptyHint, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        Button importButton = new Button(owner);
+        importButton.setText("استيراد النص الحالي");
+        importButton.setTextColor(COLOR_TEXT);
+        importButton.setBackground(roundRect(COLOR_ACCENT, dp(8)));
+        empty.addView(importButton, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48)));
+        importButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View view) {
+                captureCurrentClipboard();
+                toast("جارٍ استيراد النص من حافظة الهاتف");
+                new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+                    public void run() { refreshIfVisible(); }
+                }, 650);
+            }
+        });
+        listView.setEmptyView(empty);
+        rootView.addView(empty, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
-        TextView footer = new TextView(owner);
-        footer.setText(searchQuery == null
-                ? "اضغط على النص للصقه، واضغط مطولاً لإدارة العنصر"
-                : "نتائج البحث في جميع مجلدات الحافظة");
-        footer.setTextColor(COLOR_MUTED);
-        footer.setTextSize(11);
-        footer.setGravity(Gravity.CENTER);
-        rootView.addView(footer, new LinearLayout.LayoutParams(
+        statusView = new TextView(owner);
+        statusView.setTextColor(COLOR_MUTED);
+        statusView.setTextSize(11);
+        statusView.setGravity(Gravity.CENTER);
+        statusView.setText(searchQuery == null
+                ? "تُحفظ النصوص الجديدة تلقائياً · " + rows.size() + " عنصر"
+                : "نتائج البحث · " + rows.size() + " عنصر");
+        rootView.addView(statusView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(28)));
 
         AlertDialog.Builder builder = new AlertDialog.Builder(owner);
         builder.setTitle("الحافظة");
         dialog = builder.create();
         dialog.setView(rootView);
+        restoreKeyboardOnDismiss = true;
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            public void onDismiss(DialogInterface dismissed) {
+                ClipboardOrganizer visible = activeScreen == null ? null : activeScreen.get();
+                if (visible == ClipboardOrganizer.this) {
+                    activeScreen = new WeakReference<ClipboardOrganizer>(null);
+                }
+                if (restoreKeyboardOnDismiss) restoreKeyboardToEditor();
+            }
+        });
         attachWindow(dialog);
         dialog.show();
         activeScreen = new WeakReference<ClipboardOrganizer>(this);
@@ -428,10 +496,7 @@ public final class ClipboardOrganizer {
     }
 
     private void openSearchDialog() {
-        if (dialog != null) {
-            try { dialog.dismiss(); } catch (Exception ignored) {}
-            dialog = null;
-        }
+        dismissListDialog();
         final EditText query = new EditText(owner);
         query.setSingleLine(true);
         query.setText(searchQuery == null ? "" : searchQuery);
@@ -1023,20 +1088,32 @@ public final class ClipboardOrganizer {
         if (manager == null || Build.VERSION.SDK_INT < 11 || !isClipboardHistoryEnabled(owner)) return;
         try {
             ClipData clip = manager.getPrimaryClip();
-            if (clip == null || clip.getItemCount() == 0) return;
+            if (clip == null || clip.getItemCount() == 0) {
+                lastCaptureStatus = "لا يوجد نص في حافظة الهاتف حالياً";
+                return;
+            }
             final ArrayList<String> texts = new ArrayList<String>();
             for (int i = 0; i < clip.getItemCount(); i++) {
                 try {
-                    CharSequence value = clip.getItemAt(i).coerceToText(owner);
-                    if (value != null && value.toString().trim().length() > 0 && !texts.contains(value.toString())) texts.add(value.toString());
+                    ClipData.Item item = clip.getItemAt(i);
+                    CharSequence value = item == null ? null : item.getText();
+                    if (value == null && item != null) value = item.coerceToText(owner);
+                    if (value != null && value.toString().trim().length() > 0 &&
+                            !texts.contains(value.toString())) {
+                        texts.add(value.toString());
+                    }
                 } catch (Exception ignoredItem) {}
             }
-            if (texts.isEmpty()) return;
+            if (texts.isEmpty()) {
+                lastCaptureStatus = "المحتوى الحالي لا يحتوي على نص قابل للحفظ";
+                return;
+            }
             final String signature = clipSignature(texts);
             synchronized (ClipboardOrganizer.class) {
                 if (signature.equals(lastObservedClipSignature)) return;
                 lastObservedClipSignature = signature;
             }
+            lastCaptureStatus = "جارٍ حفظ النص المنسوخ…";
             final Context context = owner.getApplicationContext() != null ? owner.getApplicationContext() : owner;
             CLIPBOARD_EXECUTOR.execute(new Runnable() {
                 public void run() {
@@ -1054,7 +1131,8 @@ public final class ClipboardOrganizer {
                         db.execSQL("DELETE FROM notes WHERE IFNULL(folder_id,0)=0 AND rowid NOT IN (SELECT rowid FROM notes WHERE IFNULL(folder_id,0)=0 ORDER BY rowid DESC LIMIT 500)");
                         db.setTransactionSuccessful();
                         saved = true;
-                    } catch (Exception ignored) {
+                    } catch (Exception error) {
+                        lastCaptureStatus = "تعذر حفظ النص المنسوخ: " + error.getClass().getSimpleName();
                     } finally {
                         if (db != null) {
                             try { if (db.inTransaction()) db.endTransaction(); } catch (Exception ignored) {}
@@ -1062,6 +1140,7 @@ public final class ClipboardOrganizer {
                         }
                         if (!saved) synchronized (ClipboardOrganizer.class) { if (signature.equals(lastObservedClipSignature)) lastObservedClipSignature = null; }
                         else {
+                            lastCaptureStatus = "تم حفظ " + texts.size() + " نص في الحافظة";
                             new Handler(Looper.getMainLooper()).post(new Runnable() {
                                 public void run() {
                                     ClipboardOrganizer visible = activeScreen == null ? null : activeScreen.get();
@@ -1124,10 +1203,20 @@ public final class ClipboardOrganizer {
                     if (Build.VERSION.SDK_INT >= 21) {
                         owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
                     }
-                    InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
+                    final InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
                     if (imm != null) {
                         imm.restartInput(edit);
                         imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
+                        edit.postDelayed(new Runnable() {
+                            public void run() {
+                                try {
+                                    if (edit.getWindowToken() != null && !imm.isAcceptingText()) {
+                                        owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
+                                        imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
+                                    }
+                                } catch (RuntimeException ignored) {}
+                            }
+                        }, 250);
                     }
                 } catch (Exception ignored) {}
             }
@@ -1139,14 +1228,32 @@ public final class ClipboardOrganizer {
             if (dialog == null || !dialog.isShowing()) return;
             loadRows();
             if (adapter != null) adapter.notifyDataSetChanged();
+            if (statusView != null) {
+                statusView.setText((searchQuery == null ? lastCaptureStatus : "نتائج البحث") +
+                        " · " + rows.size() + " عنصر");
+            }
         } catch (RuntimeException ignored) {}
     }
 
     private void dismissListDialog() {
+        restoreKeyboardOnDismiss = false;
         if (dialog != null) {
             try { if (dialog.isShowing()) dialog.dismiss(); } catch (Exception ignored) {}
             dialog = null;
         }
+    }
+
+    /** Return focus to the client editor after the clipboard surface is closed. */
+    private void restoreKeyboardToEditor() {
+        if (owner == null || Build.VERSION.SDK_INT < 21) return;
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            public void run() {
+                try {
+                    if (owner.getCurrentInputConnection() == null) return;
+                    owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
+                } catch (RuntimeException ignored) {}
+            }
+        }, 180);
     }
 
     /** Position short input dialogs just above the active keyboard surface. */
