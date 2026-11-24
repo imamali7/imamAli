@@ -13,6 +13,8 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Handler;
+import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.text.InputType;
 import android.view.Gravity;
@@ -62,6 +64,7 @@ public final class ClipboardOrganizer {
     private static ClipboardManager monitoredClipboard;
     private static ClipboardManager.OnPrimaryClipChangedListener clipboardListener;
     private static WeakReference<DictionaryEditor> clipboardOwner = new WeakReference<DictionaryEditor>(null);
+    private static WeakReference<ClipboardOrganizer> activeScreen = new WeakReference<ClipboardOrganizer>(null);
     private static final ExecutorService CLIPBOARD_EXECUTOR = Executors.newSingleThreadExecutor();
     private static String lastObservedClipSignature;
     private static WeakReference<DictionaryEditor> selectionOwner = new WeakReference<DictionaryEditor>(null);
@@ -367,6 +370,7 @@ public final class ClipboardOrganizer {
         dialog.setView(rootView);
         attachWindow(dialog);
         dialog.show();
+        activeScreen = new WeakReference<ClipboardOrganizer>(this);
         attachWindow(dialog);
         if (dialog.getWindow() != null) {
             dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
@@ -967,6 +971,7 @@ public final class ClipboardOrganizer {
         monitoredClipboard = null;
         clipboardListener = null;
         clipboardOwner = new WeakReference<DictionaryEditor>(null);
+        lastObservedClipSignature = null;
         resetSelectionSession(null);
     }
 
@@ -1049,6 +1054,14 @@ public final class ClipboardOrganizer {
                             try { db.close(); } catch (Exception ignored) {}
                         }
                         if (!saved) synchronized (ClipboardOrganizer.class) { if (signature.equals(lastObservedClipSignature)) lastObservedClipSignature = null; }
+                        else {
+                            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                public void run() {
+                                    ClipboardOrganizer visible = activeScreen == null ? null : activeScreen.get();
+                                    if (visible != null) visible.refreshIfVisible();
+                                }
+                            });
+                        }
                     }
                 }
             });
@@ -1112,6 +1125,14 @@ public final class ClipboardOrganizer {
                 } catch (Exception ignored) {}
             }
         });
+    }
+
+    private void refreshIfVisible() {
+        try {
+            if (dialog == null || !dialog.isShowing()) return;
+            loadRows();
+            if (adapter != null) adapter.notifyDataSetChanged();
+        } catch (RuntimeException ignored) {}
     }
 
     private void dismissListDialog() {
