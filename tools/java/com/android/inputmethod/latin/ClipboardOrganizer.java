@@ -290,9 +290,6 @@ public final class ClipboardOrganizer {
                 String text = cursor.getString(1);
                 int folderId = searchQuery == null ? currentFolderId : cursor.getInt(2);
                 String label = text == null ? "" : text;
-                if (searchQuery != null && folderId != ROOT) {
-                    label = label + "\n" + getFolderPath(folderId);
-                }
                 rows.add(Row.note(id, text == null ? "" : text, label));
             }
         } catch (Exception error) {
@@ -445,22 +442,24 @@ public final class ClipboardOrganizer {
     private void chooseFolder(final Row singleRow, final boolean moveNotes) {
         final ArrayList<FolderOption> options = new ArrayList<FolderOption>();
         options.add(new FolderOption(ROOT, "الرئيسية"));
+        final ArrayList<Integer> folderIds = new ArrayList<Integer>();
         SQLiteDatabase db = null;
         Cursor cursor = null;
         try {
             db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
-            cursor = db.rawQuery("SELECT _id,name,parent_id FROM folders ORDER BY name COLLATE NOCASE", null);
-            while (cursor.moveToNext()) {
-                long id = cursor.getLong(0);
-                if (singleRow != null && singleRow.folder &&
-                        (id == singleRow.id || isDescendant(id, singleRow.id))) continue;
-                options.add(new FolderOption((int) id, getFolderPath((int) id)));
-            }
+            cursor = db.rawQuery("SELECT _id FROM folders ORDER BY name COLLATE NOCASE", null);
+            while (cursor.moveToNext()) folderIds.add(cursor.getInt(0));
         } catch (Exception error) {
             toast("تعذر تحميل المجلدات");
         } finally {
             if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
             if (db != null) try { db.close(); } catch (Exception ignored) {}
+        }
+        for (Integer folderId : folderIds) {
+            int id = folderId.intValue();
+            if (singleRow != null && singleRow.folder &&
+                    (id == singleRow.id || isDescendant(id, singleRow.id))) continue;
+            options.add(new FolderOption(id, getFolderPath(id)));
         }
         Collections.sort(options, new Comparator<FolderOption>() {
             public int compare(FolderOption a, FolderOption b) {
@@ -501,10 +500,12 @@ public final class ClipboardOrganizer {
                     values.put("folder_id", target);
                     db.update("notes", values, "rowid=?", new String[] { String.valueOf(id) });
                 } else if (key.startsWith("F:")) {
-                    if (id == target || isDescendant(target, id)) {
+                    if (id == target || isDescendant(db, target, id)) {
                         toast("لا يمكن نقل مجلد إلى داخله أو إلى أحد مجلداته الفرعية");
                         continue;
                     }
+                    int oldParent = getParentId(db, id);
+                    if (selected.contains("F:" + oldParent)) continue;
                     ContentValues values = new ContentValues();
                     values.put("parent_id", target);
                     db.update("folders", values, "_id=?", new String[] { String.valueOf(id) });
@@ -626,6 +627,40 @@ public final class ClipboardOrganizer {
         } finally { if (db != null) try { db.close(); } catch (Exception ignored) {} }
     }
 
+    private int getParentId(SQLiteDatabase db, long id) {
+        Cursor c = null;
+        try {
+            c = db.rawQuery("SELECT parent_id FROM folders WHERE _id=?",
+                    new String[] { String.valueOf(id) });
+            return c.moveToFirst() ? c.getInt(0) : ROOT;
+        } catch (Exception ignored) {
+            return ROOT;
+        } finally {
+            if (c != null) try { c.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private boolean isDescendant(SQLiteDatabase db, long candidate, long ancestor) {
+        if (candidate == ROOT) return false;
+        Cursor c = null;
+        try {
+            long current = candidate;
+            for (int depth = 0; depth < 1000 && current != ROOT; depth++) {
+                if (current == ancestor) return true;
+                c = db.rawQuery("SELECT parent_id FROM folders WHERE _id=?",
+                        new String[] { String.valueOf(current) });
+                if (!c.moveToFirst()) return false;
+                current = c.getLong(0);
+                c.close();
+                c = null;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (c != null) try { c.close(); } catch (Exception ignored) {}
+        }
+        return false;
+    }
+
     private boolean isDescendant(long candidate, long ancestor) {
         if (candidate == ROOT) return false;
         SQLiteDatabase db = null;
@@ -633,7 +668,7 @@ public final class ClipboardOrganizer {
         try {
             db = owner.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null);
             long current = candidate;
-            for (int depth = 0; depth < 100 && current != ROOT; depth++) {
+            for (int depth = 0; depth < 1000 && current != ROOT; depth++) {
                 if (current == ancestor) return true;
                 c = db.rawQuery("SELECT parent_id FROM folders WHERE _id=?",
                         new String[] { String.valueOf(current) });
