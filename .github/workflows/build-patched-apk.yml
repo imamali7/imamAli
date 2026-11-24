@@ -130,6 +130,24 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Preinstall Android emulator with retry
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
+          for attempt in 1 2 3; do
+            if "$SDKMANAGER" --install emulator --channel=0; then
+              test -x "$ANDROID_HOME/emulator/emulator"
+              exit 0
+            fi
+            rm -rf "$ANDROID_HOME/emulator"
+            sleep 15
+          done
+          echo "Android Emulator SDK package could not be installed after three attempts." >&2
+          exit 1
+
       - name: Install and smoke-test on Android emulator
         timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
@@ -182,9 +200,7 @@ jobs:
             adb shell dumpsys input_method > ime-smoke.txt
             grep -F "com.islamic.org/com.android.inputmethod.latin.DictionaryEditor" ime-smoke.txt
             adb logcat -d -t 3000 > logcat-smoke.txt
-            if grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt; then
-              exit 1
-            fi
+            ! grep -E "FATAL EXCEPTION|Fatal signal" logcat-smoke.txt
 
       - name: Upload emulator smoke-test evidence
         if: always()
