@@ -78,6 +78,12 @@ if "ClipboardOrganizer;->moveToBoundary" not in send_method:
 """, 1)
     text = text[:m.start()] + send_method + text[m.end():]
 
+# Re-find the method after the first rewrite because its byte offsets have changed.
+m = send_pattern.search(text)
+if not m:
+    raise SystemExit("sendEditorKey method disappeared after boundary patch")
+send_method = m.group(0)
+
 # Shift-selection uses absolute document offsets instead of relying on editor-specific KeyEvent handling.
 selection_anchor = """    if-eqz v0, :plain
     invoke-virtual {p0}, Lcom/android/inputmethod/latin/DictionaryEditor;->getCurrentInputConnection()Landroid/view/inputmethod/InputConnection;
