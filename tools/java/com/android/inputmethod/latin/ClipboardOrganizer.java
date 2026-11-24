@@ -104,10 +104,11 @@ public final class ClipboardOrganizer {
         }
     }
 
-    /** Move one caret step while the keyboard selection modifier is active. */
+    /** Extend selection from one stable anchor instead of Android's normalized range edge. */
     public static boolean moveWithSelection(DictionaryEditor owner, int keyCode) {
         if (owner == null || keyCode < 19 || keyCode > 22) return false;
         try {
+            if (!owner.isSelectionModeActive()) { resetSelectionSession(owner); return false; }
             InputConnection connection = owner.getCurrentInputConnection();
             if (connection == null) return false;
             ExtractedTextRequest request = new ExtractedTextRequest();
@@ -115,46 +116,62 @@ public final class ClipboardOrganizer {
             request.hintMaxLines = 100000;
             ExtractedText extracted = connection.getExtractedText(request, 0);
             if (extracted == null || extracted.text == null) return false;
-            CharSequence document = extracted.text;
+            String document = extracted.text.toString();
             int base = Math.max(0, extracted.startOffset);
             int length = document.length();
-            int active = base + Math.max(0, Math.min(length, extracted.selectionEnd));
-            int anchor = base + Math.max(0, Math.min(length, extracted.selectionStart));
-            int index = Math.max(0, Math.min(length, active - base));
+            int limit = base + length;
+            DictionaryEditor previous = selectionOwner == null ? null : selectionOwner.get();
+            if (previous != owner || selectionAnchorAbsolute < 0) {
+                int caret = base + Math.max(0, Math.min(length, extracted.selectionEnd));
+                selectionAnchorAbsolute = caret;
+                selectionActiveAbsolute = caret;
+                selectionOwner = new WeakReference<DictionaryEditor>(owner);
+            }
+            int active = Math.max(base, Math.min(limit, selectionActiveAbsolute));
+            int index = active - base;
             int target = index;
-            if (keyCode == 21) {
-                target = Math.max(0, index - 1);
-            } else if (keyCode == 22) {
-                target = Math.min(length, index + 1);
-            } else {
-                int lineStart = index == 0 ? 0 : document.toString().lastIndexOf("\n", index - 1) + 1;
+            if (keyCode == 21) target = Math.max(0, index - 1);
+            else if (keyCode == 22) target = Math.min(length, index + 1);
+            else {
+                int lineStart = index == 0 ? 0 : document.lastIndexOf("\n", index - 1) + 1;
                 int column = index - lineStart;
                 if (keyCode == 19) {
                     if (lineStart == 0) target = 0;
                     else {
                         int previousEnd = lineStart - 1;
-                        int previousStart = document.toString().lastIndexOf("\n", previousEnd - 1) + 1;
+                        int previousStart = document.lastIndexOf("\n", previousEnd - 1) + 1;
                         target = Math.min(previousStart + column, previousEnd);
                     }
                 } else {
-                    int nextStart = document.toString().indexOf("\n", index);
+                    int nextStart = document.indexOf("\n", index);
                     if (nextStart < 0) target = length;
                     else {
                         nextStart++;
-                        int nextEnd = document.toString().indexOf("\n", nextStart);
+                        int nextEnd = document.indexOf("\n", nextStart);
                         if (nextEnd < 0) nextEnd = length;
                         target = Math.min(nextStart + column, nextEnd);
                     }
                 }
             }
-            connection.setSelection(anchor, base + target);
+            int targetAbsolute = base + target;
+            int anchor = Math.max(0, Math.min(limit, selectionAnchorAbsolute));
+            connection.setSelection(anchor, targetAbsolute);
+            selectionAnchorAbsolute = anchor;
+            selectionActiveAbsolute = targetAbsolute;
             return true;
-        } catch (Throwable ignored) {
-            return false;
+        } catch (Throwable ignored) { return false; }
+    }
+
+    public static void resetSelectionSession(DictionaryEditor owner) {
+        DictionaryEditor active = selectionOwner == null ? null : selectionOwner.get();
+        if (owner == null || active == null || active == owner) {
+            selectionOwner = new WeakReference<DictionaryEditor>(null);
+            selectionAnchorAbsolute = -1;
+            selectionActiveAbsolute = -1;
         }
     }
 
-    /** Move HOME/END to actual document boundaries, with Shift-style selection. */
+    /** HOME/END shares the same anchor as repeated arrow-selection. */
     public static boolean moveToBoundary(DictionaryEditor owner, int keyCode) {
         if (owner == null || (keyCode != 122 && keyCode != 123)) return false;
         try {
@@ -165,24 +182,23 @@ public final class ClipboardOrganizer {
             request.hintMaxLines = 100000;
             ExtractedText extracted = connection.getExtractedText(request, 0);
             if (extracted == null || extracted.text == null) return false;
-
             int start = Math.max(0, extracted.startOffset);
             int end = start + extracted.text.length();
             int target = keyCode == 122 ? start : end;
-            // ExtractedText selection offsets are relative to startOffset; InputConnection
-            // requires absolute document offsets. Keeping the absolute anchor is essential
-            // when the editor exposes only a window into a long document.
-            int anchor = start + Math.max(0, extracted.selectionStart);
-            boolean extend = owner.isSelectionModeActive();
-            if (extend) {
-                connection.setSelection(anchor, target);
+            if (owner.isSelectionModeActive()) {
+                DictionaryEditor previous = selectionOwner == null ? null : selectionOwner.get();
+                if (previous != owner || selectionAnchorAbsolute < 0) {
+                    selectionAnchorAbsolute = start + Math.max(0, extracted.selectionEnd);
+                    selectionOwner = new WeakReference<DictionaryEditor>(owner);
+                }
+                connection.setSelection(Math.max(0, Math.min(end, selectionAnchorAbsolute)), target);
+                selectionActiveAbsolute = target;
             } else {
+                resetSelectionSession(owner);
                 connection.setSelection(target, target);
             }
             return true;
-        } catch (Throwable ignored) {
-            return false;
-        }
+        } catch (Throwable ignored) { return false; }
     }
 
     private boolean ensureSchema() {
@@ -446,11 +462,13 @@ public final class ClipboardOrganizer {
         search.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        positionInputDialog(search);
         enableDragging(search, searchHandle);
         showKeyboard(query);
     }
 
     private void createFolderDialog() {
+        dismissListDialog();
         final EditText name = makeEditText("اسم المجلد");
         LinearLayout content = new LinearLayout(owner);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -464,14 +482,18 @@ public final class ClipboardOrganizer {
         builder.setPositiveButton("إنشاء", new DialogInterface.OnClickListener() {
             public void onClick(DialogInterface d, int which) {
                 String value = name.getText().toString().trim();
-                if (value.length() == 0) { toast("اكتب اسم المجلد"); return; }
-                if (createFolder(value, currentFolderId)) {
-                    toast("تم إنشاء المجلد");
+                if (value.length() == 0) {
+                    toast("اكتب اسم المجلد");
                     showList();
+                    return;
                 }
+                if (createFolder(value, currentFolderId)) toast("تم إنشاء المجلد");
+                showList();
             }
         });
-        builder.setNegativeButton("إلغاء", null);
+        builder.setNegativeButton("إلغاء", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int which) { showList(); }
+        });
         AlertDialog prompt = builder.create();
         attachWindow(prompt);
         prompt.show();
@@ -479,7 +501,11 @@ public final class ClipboardOrganizer {
         prompt.getWindow().setSoftInputMode(
                 WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE |
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        positionInputDialog(prompt);
         enableDragging(prompt, handle);
+        prompt.setOnCancelListener(new DialogInterface.OnCancelListener() {
+            public void onCancel(DialogInterface d) { showList(); }
+        });
         showKeyboard(name);
     }
 
@@ -1044,6 +1070,42 @@ public final class ClipboardOrganizer {
                         imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
                     }
                 } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    private void dismissListDialog() {
+        if (dialog != null) {
+            try { if (dialog.isShowing()) dialog.dismiss(); } catch (Exception ignored) {}
+            dialog = null;
+        }
+    }
+
+    /** Position short input dialogs just above the active keyboard surface. */
+    private void positionInputDialog(final AlertDialog target) {
+        if (target == null || target.getWindow() == null) return;
+        final Window window = target.getWindow();
+        window.getDecorView().post(new Runnable() {
+            public void run() {
+                try {
+                    WindowManager.LayoutParams params = window.getAttributes();
+                    int screenHeight = owner.getResources().getDisplayMetrics().heightPixels;
+                    int screenWidth = owner.getResources().getDisplayMetrics().widthPixels;
+                    int imeHeight = 0;
+                    Dialog imeDialog = owner.getWindow();
+                    if (imeDialog != null && imeDialog.getWindow() != null) {
+                        View decor = imeDialog.getWindow().getDecorView();
+                        if (decor != null) imeHeight = decor.getHeight();
+                    }
+                    int dialogHeight = window.getDecorView().getHeight();
+                    if (dialogHeight <= 0) dialogHeight = dp(112);
+                    params.width = (int)(screenWidth * 0.96f);
+                    params.height = WindowManager.LayoutParams.WRAP_CONTENT;
+                    params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                    params.y = Math.max(dp(8), screenHeight - imeHeight - dialogHeight - dp(8));
+                    window.setAttributes(params);
+                    window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+                } catch (RuntimeException ignored) {}
             }
         });
     }
