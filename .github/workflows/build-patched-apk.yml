@@ -86,7 +86,8 @@ jobs:
           "$BT/apksigner" sign --ks debug.keystore --ks-pass pass:android \
             --key-pass pass:android --out keyboard-patched-debug.apk aligned.apk
           "$BT/apksigner" verify --verbose --print-certs keyboard-patched-debug.apk
-          "$BT/aapt" dump badging keyboard-patched-debug.apk | head -n 5
+          "$BT/aapt" dump badging keyboard-patched-debug.apk > badging.txt
+          cat badging.txt
           unzip -t keyboard-patched-debug.apk
 
       - name: Upload patched APK and build evidence
@@ -96,5 +97,6 @@ jobs:
           path: |
             keyboard-patched-debug.apk
             original-apk-sha256.txt
+            badging.txt
           if-no-files-found: error
           retention-days: 30
