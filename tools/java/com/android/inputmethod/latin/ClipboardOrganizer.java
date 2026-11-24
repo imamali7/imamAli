@@ -394,6 +394,7 @@ public final class ClipboardOrganizer {
         query.setTextColor(COLOR_TEXT);
         query.setHintTextColor(COLOR_MUTED);
         query.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        if (Build.VERSION.SDK_INT >= 17) query.setTextDirection(View.TEXT_DIRECTION_RTL);
         query.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         query.setPadding(dp(12), dp(8), dp(12), dp(8));
         query.setBackground(roundRect(COLOR_PANEL, dp(8)));
@@ -1000,15 +1001,26 @@ public final class ClipboardOrganizer {
         if (edit == null) return;
         edit.setFocusable(true);
         edit.setFocusableInTouchMode(true);
+        if (Build.VERSION.SDK_INT >= 21) edit.setShowSoftInputOnFocus(true);
         edit.requestFocus();
         edit.post(new Runnable() {
             public void run() {
                 try {
-                    // The floating dialog is attached to the editor window, not to the
-                    // IME window. This lets the active keyboard remain above the dialog.
-                    if (Build.VERSION.SDK_INT >= 21) owner.requestShowSelf(0);
+                    // Wait until the attached dialog has a window token and has completed
+                    // its first layout; otherwise Android may route the request to the
+                    // editor behind the panel and leave the IME hidden behind the dialog.
+                    if (edit.getWindowToken() == null) {
+                        edit.post(this);
+                        return;
+                    }
+                    if (Build.VERSION.SDK_INT >= 21) {
+                        owner.requestShowSelf(InputMethodManager.SHOW_IMPLICIT);
+                    }
                     InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
-                    if (imm != null) imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
+                    if (imm != null) {
+                        imm.restartInput(edit);
+                        imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
+                    }
                 } catch (Exception ignored) {}
             }
         });
@@ -1073,6 +1085,7 @@ public final class ClipboardOrganizer {
         edit.setTextColor(COLOR_TEXT);
         edit.setHintTextColor(COLOR_MUTED);
         edit.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        if (Build.VERSION.SDK_INT >= 17) edit.setTextDirection(View.TEXT_DIRECTION_RTL);
         edit.setPadding(dp(12), dp(8), dp(12), dp(8));
         edit.setBackground(roundRect(COLOR_PANEL, dp(8)));
         return edit;
@@ -1135,6 +1148,9 @@ public final class ClipboardOrganizer {
             // Keep touches outside the floating panel available to the keyboard and allow
             // the system IME to be displayed above this window when an EditText is focused.
             lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+            // The dialog must own focus so EditText receives key events. Clearing
+            // ALT_FOCUSABLE_IM keeps the system keyboard above this attached window.
+            lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
             lp.flags &= ~WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
             lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
             // Keep the platform's centered initial placement. The drag handler switches
