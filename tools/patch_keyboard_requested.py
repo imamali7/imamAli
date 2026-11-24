@@ -116,10 +116,11 @@ old = """    iget v1, p0, Lcom/android/inputmethod/latin/DictionaryEditor;->mLas
 """
 new = """    iget v1, p0, Lcom/android/inputmethod/latin/DictionaryEditor;->mLastSelectionStart:I
     if-eq v1, p3, :clipboard_check_selection_end
-    goto :cond_b
+    goto :clipboard_selection_changed
     :clipboard_check_selection_end
     iget v1, p0, Lcom/android/inputmethod/latin/DictionaryEditor;->mLastSelectionEnd:I
     if-eq v1, p4, :cond_b
+    :clipboard_selection_changed
 
     .line 1155
 """
