@@ -137,15 +137,15 @@ jobs:
 
           listener = root / "smali/com/android/inputmethod/latin/DictionaryEditor$20.smali"
           text = listener.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "    const-string v1, \\"\\'\\"\n\n"
-              "    const-string v2, \\" \\"\n\n"
-              "    invoke-virtual {v0, v1, v2}, Ljava/lang/String;->replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;\n\n"
-              "    move-result-object v0\n\n",
-              "",
-              "preserve copied apostrophes",
-          )
+          # Keep the copied string byte-for-byte; dbadd now escapes SQL quotes safely.
+          marker = '    .line 214\n    .local v0, "t":Ljava/lang/String;\n'
+          start = text.find(marker)
+          if start < 0:
+              raise SystemExit("Clipboard callback anchor not found")
+          end = text.find("    .line 215\n", start)
+          if end < 0:
+              raise SystemExit("Clipboard callback end anchor not found")
+          text = text[:start] + marker + text[end:]
           listener.write_text(text, encoding="utf-8")
 
           layout = root / "res/layout/layout1.xml"
@@ -243,7 +243,7 @@ jobs:
               const/4 v0, 0x1
               return v0
           .end method
-          """.replace("\n          ", "\n"), encoding="utf-8")
+          """.replace("\n          ", "\n").lstrip(), encoding="utf-8")
           PY
 
       - name: Build APK
