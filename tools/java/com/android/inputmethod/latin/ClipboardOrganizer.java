@@ -12,6 +12,7 @@ import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.IBinder;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -80,10 +81,17 @@ public final class ClipboardOrganizer {
     public static void show(DictionaryEditor owner) {
         if (owner == null) return;
         ClipboardOrganizer screen = new ClipboardOrganizer(owner);
-        if (screen.ensureSchema()) {
+        try {
+            if (!screen.ensureSchema()) return;
             startClipboardMonitor(owner);
             screen.captureCurrentClipboard();
             screen.showList();
+        } catch (RuntimeException error) {
+            // A transient window/token or platform UI failure must not terminate the IME.
+            screen.toast("تعذر فتح الحافظة. أغلقها وحاول مرة أخرى");
+            try {
+                if (screen.dialog != null && screen.dialog.isShowing()) screen.dialog.dismiss();
+            } catch (Exception ignored) {}
         }
     }
 
@@ -1120,42 +1128,38 @@ public final class ClipboardOrganizer {
     }
 
     private void attachWindow(AlertDialog target) {
+        if (target == null) return;
         try {
             Window window = target.getWindow();
             if (window == null) return;
-            WindowManager.LayoutParams lp = window.getAttributes();
-            lp.type = WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG;
 
-            // Attach the panel to the application currently receiving text. Attaching it
-            // to the IME decor makes it a child of the keyboard window and places it above
-            // the keyboard, which prevents the keyboard from remaining visible over fields.
-            InputBinding binding = owner.getCurrentInputBinding();
-            if (binding != null && binding.getConnectionToken() != null) {
-                lp.token = binding.getConnectionToken();
-            } else {
-                Dialog serviceDialog = owner.getWindow();
-                if (serviceDialog != null && serviceDialog.getWindow() != null) {
-                    View decor = serviceDialog.getWindow().getDecorView();
-                    if (decor != null && decor.getWindowToken() != null) {
-                        lp.token = decor.getWindowToken();
-                    }
-                }
+            WindowManager.LayoutParams lp = window.getAttributes();
+            Dialog imeWindow = owner.getWindow();
+            IBinder imeWindowToken = null;
+            if (imeWindow != null && imeWindow.getWindow() != null) {
+                View decor = imeWindow.getWindow().getDecorView();
+                if (decor != null) imeWindowToken = decor.getWindowToken();
             }
 
-            // Keep touches outside the floating panel available to the keyboard and allow
-            // the system IME to be displayed above this window when an EditText is focused.
+            // InputBinding.getConnectionToken() identifies an input connection, not
+            // an Android window. Using it as LayoutParams.token can make addView()
+            // throw BadTokenException and crash the entire keyboard process.
+            // Attach only to the actual IME window token, and never replace a valid
+            // token with a connection token or a null value.
+            if (imeWindowToken != null) {
+                lp.type = WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG;
+                lp.token = imeWindowToken;
+            }
             lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
-            // The dialog must own focus so EditText receives key events. Clearing
-            // ALT_FOCUSABLE_IM keeps the system keyboard above this attached window.
             lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
             lp.flags &= ~WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
             lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
-            // Keep the platform's centered initial placement. The drag handler switches
-            // to TOP|LEFT coordinates only after the user starts dragging the handle.
             window.setAttributes(lp);
-        } catch (Exception ignored) {}
+        } catch (RuntimeException windowError) {
+            // Keep Android's default Dialog token/type if the IME window is not ready.
+            // The caller can still display the panel using the framework defaults.
+        }
     }
-
     private void toast(String message) {
         try { Toast.makeText(owner, message, Toast.LENGTH_SHORT).show(); }
         catch (Exception ignored) {}
