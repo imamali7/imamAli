@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="\${GITHUB_WORKSPACE:-.}"
-SDK="\${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+ROOT="$GITHUB_WORKSPACE"
+SDK="$ANDROID_HOME"
+if [ -z "$ROOT" ]; then ROOT="."; fi
+if [ -z "$SDK" ]; then SDK="/usr/local/lib/android/sdk"; fi
 BT="$SDK/build-tools/35.0.0"
 ANDROID_JAR="$SDK/platforms/android-35/android.jar"
 BUILD="$ROOT/.clipboard-helper-build"
