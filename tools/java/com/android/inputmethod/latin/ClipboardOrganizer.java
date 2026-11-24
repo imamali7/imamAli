@@ -20,6 +20,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
+import android.view.inputmethod.InputBinding;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.AdapterView;
@@ -328,7 +329,10 @@ public final class ClipboardOrganizer {
         dialog.show();
         attachWindow(dialog);
         if (dialog.getWindow() != null) {
-            dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            dialog.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+            dialog.getWindow().setSoftInputMode(
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE |
+                    WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED);
             int screenWidth = owner.getResources().getDisplayMetrics().widthPixels;
             int screenHeight = owner.getResources().getDisplayMetrics().heightPixels;
             dialog.getWindow().setLayout((int) (screenWidth * 0.96f), (int) (screenHeight * 0.62f));
@@ -352,9 +356,10 @@ public final class ClipboardOrganizer {
                 cursor = db.rawQuery("SELECT rowid,note FROM notes WHERE IFNULL(folder_id,0)=? ORDER BY rowid DESC",
                         new String[] { String.valueOf(currentFolderId) });
             } else {
+                // instr() treats %, _ and backslashes literally instead of as LIKE wildcards.
                 cursor = db.rawQuery("SELECT rowid,note,IFNULL(folder_id,0) FROM notes " +
-                        "WHERE LOWER(note) LIKE ? ORDER BY rowid DESC",
-                        new String[] { "%" + searchQuery.toLowerCase() + "%" });
+                        "WHERE instr(LOWER(note), LOWER(?)) > 0 ORDER BY rowid DESC",
+                        new String[] { searchQuery });
             }
             while (cursor.moveToNext()) {
                 long id = cursor.getLong(0);
@@ -972,6 +977,9 @@ public final class ClipboardOrganizer {
         edit.post(new Runnable() {
             public void run() {
                 try {
+                    // The floating dialog is attached to the editor window, not to the
+                    // IME window. This lets the active keyboard remain above the dialog.
+                    if (Build.VERSION.SDK_INT >= 21) owner.requestShowSelf(0);
                     InputMethodManager imm = (InputMethodManager) owner.getSystemService(Context.INPUT_METHOD_SERVICE);
                     if (imm != null) imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
                 } catch (Exception ignored) {}
@@ -1080,11 +1088,29 @@ public final class ClipboardOrganizer {
             if (window == null) return;
             WindowManager.LayoutParams lp = window.getAttributes();
             lp.type = WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG;
-            Dialog serviceDialog = owner.getWindow();
-            if (serviceDialog != null && serviceDialog.getWindow() != null) {
-                View decor = serviceDialog.getWindow().getDecorView();
-                if (decor != null && decor.getWindowToken() != null) lp.token = decor.getWindowToken();
+
+            // Attach the panel to the application currently receiving text. Attaching it
+            // to the IME decor makes it a child of the keyboard window and places it above
+            // the keyboard, which prevents the keyboard from remaining visible over fields.
+            InputBinding binding = owner.getCurrentInputBinding();
+            if (binding != null && binding.getConnectionToken() != null) {
+                lp.token = binding.getConnectionToken();
+            } else {
+                Dialog serviceDialog = owner.getWindow();
+                if (serviceDialog != null && serviceDialog.getWindow() != null) {
+                    View decor = serviceDialog.getWindow().getDecorView();
+                    if (decor != null && decor.getWindowToken() != null) {
+                        lp.token = decor.getWindowToken();
+                    }
+                }
             }
+
+            // Keep touches outside the floating panel available to the keyboard and allow
+            // the system IME to be displayed above this window when an EditText is focused.
+            lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+            lp.flags &= ~WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM;
+            lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
+            lp.gravity = Gravity.TOP | Gravity.LEFT;
             window.setAttributes(lp);
         } catch (Exception ignored) {}
     }
