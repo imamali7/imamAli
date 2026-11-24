@@ -28,7 +28,7 @@ expected = {
     "key5": "@string/arrows_keys_hight_vertical",
 }
 for suffix, key in expected.items():
-    if node.attrib.get(android + suffix) != key:
+    if node.attrib.get(suffix) != key:
         raise SystemExit("Portrait preference mapping mismatch for " + suffix)
 
 defaults = {
@@ -39,7 +39,7 @@ defaults = {
     "defaultValue5": "58",
 }
 for attribute, value in defaults.items():
-    node.set(android + attribute, value)
+    node.set(attribute, value)
 
 # Expose an explicit, enabled-by-default clipboard-history switch in keyboard settings.
 layout_screens = [n for n in tree.iter() if n.attrib.get(android + "key") == "layout_menu"]
@@ -55,7 +55,7 @@ if not any(n.attrib.get(android + "key") == "clipboard_history_enabled" for n in
 
 tree.write(str(path), encoding="utf-8", xml_declaration=True)
 verified = ET.parse(str(path))
-portrait = [n for n in verified.iter() if n.attrib.get(android + "key1") == "@string/key_hight_vertical"]
-if len(portrait) != 1 or any(portrait[0].attrib.get(android + k) != v for k, v in defaults.items()):
+portrait = [n for n in verified.iter() if n.attrib.get("key1") == "@string/key_hight_vertical"]
+if len(portrait) != 1 or any(portrait[0].attrib.get(k) != v for k, v in defaults.items()):
     raise SystemExit("Portrait keyboard defaults failed post-write validation")
 print("OK: portrait defaults = key height 138, row gap 169, text size 142, bottom padding 20, arrow height 58")
