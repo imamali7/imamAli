@@ -13,7 +13,7 @@ android = "{http://schemas.android.com/apk/res/android}"
 tree = ET.parse(str(path))
 matches = []
 for node in tree.iter():
-    if node.attrib.get(android + "key1") == "@string/key_hight_vertical":
+    if node.attrib.get("key1") == "@string/key_hight_vertical":
         matches.append(node)
 
 if len(matches) != 1:
