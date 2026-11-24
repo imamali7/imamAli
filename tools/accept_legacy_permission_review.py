@@ -28,7 +28,7 @@ def find_continue_button(xml_path):
         description = (node.attrib.get("content-desc") or "").strip().lower()
         if text == "continue" or description == "continue":
             bounds = node.attrib.get("bounds", "")
-            match = re.fullmatch(r"\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]", bounds)
+            match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds)
             if match:
                 left, top, right, bottom = map(int, match.groups())
                 return (left + right) // 2, (top + bottom) // 2
