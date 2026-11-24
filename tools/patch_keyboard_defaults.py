@@ -41,6 +41,18 @@ defaults = {
 for attribute, value in defaults.items():
     node.set(android + attribute, value)
 
+# Expose an explicit, enabled-by-default clipboard-history switch in keyboard settings.
+layout_screens = [n for n in tree.iter() if n.attrib.get(android + "key") == "layout_menu"]
+if len(layout_screens) != 1:
+    raise SystemExit("Expected exactly one layout settings screen")
+if not any(n.attrib.get(android + "key") == "clipboard_history_enabled" for n in layout_screens[0].iter()):
+    toggle = ET.Element("CheckBoxPreference")
+    toggle.set(android + "persistent", "true")
+    toggle.set(android + "title", "@string/c6")
+    toggle.set(android + "key", "clipboard_history_enabled")
+    toggle.set(android + "defaultValue", "true")
+    layout_screens[0].append(toggle)
+
 tree.write(str(path), encoding="utf-8", xml_declaration=True)
 verified = ET.parse(str(path))
 portrait = [n for n in verified.iter() if n.attrib.get(android + "key1") == "@string/key_hight_vertical"]
