@@ -151,6 +151,10 @@ jobs:
             adb shell pm grant com.islamic.org android.permission.WRITE_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.READ_EXTERNAL_STORAGE || true
             adb shell pm grant com.islamic.org android.permission.RECORD_AUDIO || true
+            # Trigger the first launch so Android 10 actually presents its legacy
+            # permission-review screen before the accessibility-based dismissal below.
+            adb shell am start -n com.islamic.org/com.android.inputmethod.latin.BackupPro || true
+            sleep 2
             # Android 10 may show a legacy-permission review screen on first launch.
             # Find and tap its accessible action by label; avoid brittle fixed coordinates.
             python3 - <<'PY'
@@ -180,6 +184,7 @@ jobs:
                 if not tapped:
                     break
             PY
+            adb shell am force-stop com.islamic.org || true
             adb shell ime enable com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell ime set com.islamic.org/com.android.inputmethod.latin.DictionaryEditor
             adb shell am force-stop com.islamic.org || true
